@@ -1090,6 +1090,7 @@ const i18n_entry_t i18n_entries_it[] = {
     {"Select all", (const char * const[]){"Seleziona tutto"}, 1},
     {"Select all (%d)", (const char * const[]){"Seleziona tutto (%d)"}, 1},
     {"Selected plugins are ready.\n", (const char * const[]){"I plugin selezionati sono pronti.\n"}, 1},
+    {"Send cover art", (const char * const[]){"Invia copertina"}, 1},
     {"September", (const char * const[]){"settembre"}, 1},
     {"Sequential", (const char * const[]){"Sequenziale"}, 1},
     {"Server URL (e.g. %s)", (const char * const[]){"URL del server (es. %s)"}, 1},

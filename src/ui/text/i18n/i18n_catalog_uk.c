@@ -1090,6 +1090,7 @@ const i18n_entry_t i18n_entries_uk[] = {
     {"Select all", (const char * const[]){"Вибрати все"}, 1},
     {"Select all (%d)", (const char * const[]){"Вибрати все (%d)"}, 1},
     {"Selected plugins are ready.\n", (const char * const[]){"Вибрані плагіни готові.\n"}, 1},
+    {"Send cover art", (const char * const[]){"Надсилати обкладинку"}, 1},
     {"September", (const char * const[]){"Вересень"}, 1},
     {"Sequential", (const char * const[]){"По порядку"}, 1},
     {"Server URL (e.g. %s)", (const char * const[]){"Адреса сервера (наприклад, %s)"}, 1},
