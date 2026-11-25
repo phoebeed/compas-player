@@ -1090,6 +1090,7 @@ const i18n_entry_t i18n_entries_vi[] = {
     {"Select all", (const char * const[]){"Chọn tất cả"}, 1},
     {"Select all (%d)", (const char * const[]){"Chọn tất cả (%d)"}, 1},
     {"Selected plugins are ready.\n", (const char * const[]){"Các plugin đã chọn đã sẵn sàng.\n"}, 1},
+    {"Send cover art", (const char * const[]){"Gửi ảnh bìa"}, 1},
     {"September", (const char * const[]){"Tháng 9"}, 1},
     {"Sequential", (const char * const[]){"Tuần tự"}, 1},
     {"Server URL (e.g. %s)", (const char * const[]){"URL máy chủ (ví dụ: %s)"}, 1},

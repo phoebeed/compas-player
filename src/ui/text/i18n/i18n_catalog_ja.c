@@ -1090,6 +1090,7 @@ const i18n_entry_t i18n_entries_ja[] = {
     {"Select all", (const char * const[]){"すべて選択"}, 1},
     {"Select all (%d)", (const char * const[]){"すべて選択（%d）"}, 1},
     {"Selected plugins are ready.\n", (const char * const[]){"選択したプラグインを利用できます。\n"}, 1},
+    {"Send cover art", (const char * const[]){"カバーアートを送信"}, 1},
     {"September", (const char * const[]){"9月"}, 1},
     {"Sequential", (const char * const[]){"順番に"}, 1},
     {"Server URL (e.g. %s)", (const char * const[]){"サーバーURL（例：%s）"}, 1},

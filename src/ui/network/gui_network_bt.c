@@ -669,6 +669,7 @@ static void populate_bt_advanced_screen(void);
  * the rows now but the callbacks stay next to the state they touch. */
 static void bt_volume_sync_toggle_cb(lv_event_t * e);
 static void bt_hide_unnamed_toggle_cb(lv_event_t * e);
+static void bt_send_cover_art_toggle_cb(lv_event_t * e);
 static void bt_restore_at_startup_toggle_cb(lv_event_t * e);
 static void bt_codec_settings_row_cb(lv_event_t * e);
 
@@ -836,6 +837,10 @@ static void populate_bt_advanced_screen(void) {
      * the resampler at all. */
     add_pill_toggle_row(bt_advanced_list, TR("Speex resampling"),
                         current_settings.bt_speexrate_enabled, bt_speexrate_toggle_cb);
+    /* Cars that do not understand AVRCP cover art can lose the title when
+     * an image handle is sent; turning this off sends no artwork. */
+    add_pill_toggle_row(bt_advanced_list, TR("Send cover art"),
+                        current_settings.bt_send_cover_art, bt_send_cover_art_toggle_cb);
     add_pill_toggle_row(bt_advanced_list, TR("Hide unnamed devices"),
                         current_settings.bt_hide_unnamed_devices, bt_hide_unnamed_toggle_cb);
     add_pill_toggle_row(bt_advanced_list, TR("Restore at startup"),
@@ -870,6 +875,16 @@ static void bt_hide_unnamed_toggle_cb(lv_event_t * e) {
     settings_save_async(&current_settings);
     populate_bt_advanced_screen(); /* moves the switch the user just tapped */
     populate_bt_screen();          /* and the device list it filters, for the way back */
+}
+
+/* Takes effect on the next GUI tick: gui_external_controls stops (or
+ * resumes) passing the cover art URL, which changes the metadata BlueZ
+ * hands the car. */
+static void bt_send_cover_art_toggle_cb(lv_event_t * e) {
+    if (lv_event_get_code(e) != LV_EVENT_CLICKED) return;
+    current_settings.bt_send_cover_art = !current_settings.bt_send_cover_art;
+    settings_save_async(&current_settings);
+    populate_bt_advanced_screen();
 }
 
 static void bt_restore_at_startup_toggle_cb(lv_event_t * e) {
