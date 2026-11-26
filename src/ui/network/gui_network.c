@@ -3,6 +3,7 @@
 #include "gui_network.h"
 #include "../widgets/builders/screen_builders.h"
 #include "gui_network_internal.h"
+#include "gui_network_discworld.h"
 
 static lv_obj_t * wireless_screen;
 
@@ -166,6 +167,7 @@ void gui_network_init(void) {
     gui_network_usb_build();
     gui_network_receivers_build();
     gui_network_services_build();
+    gui_network_discworld_build();
     wireless_screen = build_wireless_screen();
 }
 
@@ -183,6 +185,7 @@ void gui_network_teardown(void) {
     gui_network_wifi_screen_teardown();
     gui_network_receivers_teardown();
     gui_network_services_teardown();
+    gui_network_discworld_teardown();
     gui_network_choice_settings_teardown();
     gui_network_usb_teardown();
     network_delete_screen(&wireless_screen);
@@ -190,7 +193,8 @@ void gui_network_teardown(void) {
 
 bool gui_network_has_background_work(void) {
     return gui_network_wifi_has_work() || gui_network_bt_has_work() ||
-           gui_network_usb_has_work() || gui_network_services_has_work();
+           gui_network_usb_has_work() || gui_network_services_has_work() ||
+           gui_network_discworld_has_work();
 }
 
 void gui_network_cancel_background_work(void) {
@@ -200,6 +204,7 @@ void gui_network_cancel_background_work(void) {
     gui_network_bt_cancel();
     gui_network_usb_cancel();
     gui_network_services_cancel();
+    gui_network_discworld_cancel();
 }
 
 lv_obj_t * gui_network_get_wifi_screen(void) { return wifi_screen; }

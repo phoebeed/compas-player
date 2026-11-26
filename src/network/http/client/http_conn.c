@@ -9,6 +9,7 @@
 #include "../../../core/process/worker_thread.h"
 #include "http_conn.h"
 #include "http_client.h" /* for struct http_cancel_token's real definition */
+#include "mdns_resolve.h"
 #include "../../security/ca_bundle.h"
 
 #include <string.h>
@@ -104,7 +105,18 @@ static void * dns_resolve_thread_func(void * arg) {
     hints.ai_family = AF_UNSPEC;
     hints.ai_socktype = SOCK_STREAM;
     hints.ai_protocol = IPPROTO_TCP;
-    int rc = getaddrinfo(ctx->host, ctx->port, &hints, &addr_list);
+    /* "name.local" lives in multicast DNS, which musl's resolver never asks:
+     * look it up there first and hand getaddrinfo() the address, so the
+     * result is still an ordinary addrinfo list. A home router that also
+     * serves the name in plain DNS is the fallback. */
+    char mdns_addr[48];
+    int rc = EAI_NONAME;
+    if (mdns_is_local_name(ctx->host) && mdns_resolve_ipv4(ctx->host, 1500, mdns_addr, sizeof(mdns_addr))) {
+        hints.ai_flags = AI_NUMERICHOST;
+        rc = getaddrinfo(mdns_addr, ctx->port, &hints, &addr_list);
+        hints.ai_flags = 0;
+    }
+    if (rc != 0) rc = getaddrinfo(ctx->host, ctx->port, &hints, &addr_list);
 
     pthread_mutex_lock(&ctx->mutex);
     if (ctx->abandoned) {
