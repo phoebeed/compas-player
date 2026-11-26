@@ -199,7 +199,12 @@ typedef struct {
      * network (empty: only when asked). charging_only: never sync on battery. */
     char discworld_url[256];
     char discworld_password[128];
-    char discworld_profile[64];
+    /* The people whose favourite playlists the player keeps, comma
+     * separated ("Rachel, Phoebe, Amelie"): Home > Favourites shows one
+     * button each, reading Playlists/Favourites/<name>/, and the Discworld
+     * sync fills those folders with each one's playlists. Empty: one flat
+     * Favourites list. */
+    char favorites_people[160];
     char discworld_auto_ssid[33];
     bool discworld_charging_only;
     int discworld_last_sync; /* time() of the last sync that finished, 0: never */

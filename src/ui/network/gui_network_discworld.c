@@ -140,7 +140,7 @@ static bool dw_start(dw_job_kind_t kind) {
     dw_job.kind = kind;
     discworld_normalize_url(current_settings.discworld_url, dw_job.config.base_url, sizeof(dw_job.config.base_url));
     snprintf(dw_job.config.password, sizeof(dw_job.config.password), "%s", current_settings.discworld_password);
-    snprintf(dw_job.config.profile, sizeof(dw_job.config.profile), "%s", current_settings.discworld_profile);
+    snprintf(dw_job.config.people, sizeof(dw_job.config.people), "%s", current_settings.favorites_people);
     snprintf(dw_job.config.card_root, sizeof(dw_job.config.card_root), "%s", MUSIC_ROOT_DIR);
 #ifndef HOST_BUILD
     dw_job.config.require_mounted = true;
@@ -380,7 +380,7 @@ static void dw_password_done(const char * text, void * user) {
 
 static void dw_profile_done(const char * text, void * user) {
     (void) user;
-    snprintf(current_settings.discworld_profile, sizeof(current_settings.discworld_profile), "%s", text ? text : "");
+    snprintf(current_settings.favorites_people, sizeof(current_settings.favorites_people), "%s", text ? text : "");
     settings_save_async(&current_settings);
     dw_populate();
 }
@@ -397,7 +397,7 @@ static void dw_password_row_cb(lv_event_t * e) {
 
 static void dw_profile_row_cb(lv_event_t * e) {
     if (lv_event_get_code(e) != LV_EVENT_CLICKED) return;
-    show_text_entry(TR("Whose playlists"), current_settings.discworld_profile, false, false, dw_profile_done, NULL);
+    show_text_entry(TR("People, separated by commas"), current_settings.favorites_people, false, false, dw_profile_done, NULL);
 }
 
 static void dw_sync_row_cb(lv_event_t * e) {
@@ -467,12 +467,13 @@ static void dw_populate(void) {
     add_pill_chevron_row(dw_list, label, dw_url_row_cb);
     add_pill_chevron_row(dw_list, current_settings.discworld_password[0] ? TR("Password: set") : TR("Password: none"),
                          dw_password_row_cb);
-    snprintf(label, sizeof(label), TR("Playlists of: %s"),
-             current_settings.discworld_profile[0] ? current_settings.discworld_profile : TR("shared only"));
+    snprintf(label, sizeof(label), TR("People: %s"),
+             current_settings.favorites_people[0] ? current_settings.favorites_people : TR("shared playlists only"));
     add_pill_chevron_row(dw_list, label, dw_profile_row_cb);
     add_network_explanation(dw_list,
-        TR("Copies Discworld's Music folder to Music on the SD card, the same way its Sync with HiBy page "
-           "does over USB, and your playlists to Playlists/Favourites, so they show under Favourites on Home. "
+        TR("Copies Discworld's Music and Audiobooks folders to the SD card, the same way its Sync with HiBy page "
+           "does over USB, and each person's playlists to their own folder in Playlists/Favourites, so they show "
+           "under their name in Favourites on Home. "
            "Files you put on the card yourself are never touched."));
     lv_obj_scroll_to_y(dw_list, scroll_y, LV_ANIM_OFF);
 }

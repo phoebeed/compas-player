@@ -24,6 +24,7 @@
 #define DW_LISTING_MAX_WAIT_MS (20U * 60U * 1000U)
 #define DW_SAVE_EVERY 100
 #define DW_MUSIC_FOLDER "Music"
+#define DW_AUDIOBOOKS_FOLDER "Audiobooks"
 
 /* ---- small helpers ------------------------------------------------------------------------ */
 
@@ -44,9 +45,17 @@ void discworld_normalize_url(const char * input, char * out, size_t size) {
     snprintf(out, size, "%s%.*s", has_scheme ? "" : "http://", (int) len, input);
 }
 
+/* The top folder of a card path the sync may write: Music or Audiobooks
+ * (compás's Books reads <card>/Audiobooks). Its length, or 0 for neither. */
+static size_t dw_top_folder_len(const char * path) {
+    static const char * const tops[] = { DW_MUSIC_FOLDER "/", DW_AUDIOBOOKS_FOLDER "/" };
+    for (size_t i = 0; path && i < sizeof(tops) / sizeof(tops[0]); i++)
+        if (strncmp(path, tops[i], strlen(tops[i])) == 0) return strlen(tops[i]) - 1;
+    return 0;
+}
+
 bool discworld_card_path_ok(const char * path) {
-    const size_t folder_len = sizeof(DW_MUSIC_FOLDER) - 1;
-    if (!path || strncmp(path, DW_MUSIC_FOLDER "/", folder_len + 1) != 0) return false;
+    if (!dw_top_folder_len(path)) return false;
     if (strlen(path) >= PATH_MAX - 300) return false;
     for (const unsigned char * c = (const unsigned char *) path; *c; c++)
         if (*c < 32 || *c == '\\' || *c == 127) return false;
@@ -330,7 +339,7 @@ static bool dw_parse_manifest(dw_state_t * st, char * text, size_t len) {
                 if (!dw_take(&j, '}')) return false;
             }
             if (!f.p || !f.c || !f.v || !has_s || !f.p[0]) return false;
-            if (!discworld_card_path_ok(f.c)) continue; /* never write outside Music/ */
+            if (!discworld_card_path_ok(f.c)) continue; /* never write outside Music/ or Audiobooks/ */
             if (st->count == cap) {
                 cap = cap ? cap * 2 : 1024;
                 dw_file_t * grown = realloc(st->files, sizeof(*grown) * (size_t) cap);
@@ -711,13 +720,15 @@ static bool dw_file_exists(const char * root, const char * rel, uint64_t * size)
     return true;
 }
 
-/* Deletes what left Music, then the folders that left empty (never Music itself). */
+/* Deletes what left Music or Audiobooks, then the folders that left empty
+ * (never Music or Audiobooks itself). */
 static void dw_remove_one(const char * root, const char * rel) {
     char path[PATH_MAX];
     if (!dw_join(path, sizeof(path), root, rel)) return;
     unlink(path);
-    char music[PATH_MAX];
-    if (!dw_join(music, sizeof(music), root, DW_MUSIC_FOLDER)) return;
+    char top[PATH_MAX], music[PATH_MAX];
+    snprintf(top, sizeof(top), "%.*s", (int) dw_top_folder_len(rel), rel);
+    if (!top[0] || !dw_join(music, sizeof(music), root, top)) return;
     for (char * slash = strrchr(path, '/'); slash; slash = strrchr(path, '/')) {
         *slash = '\0';
         if (strlen(path) <= strlen(music) || rmdir(path) != 0) break;
@@ -762,22 +773,61 @@ static bool dw_playlist_name_ok(const char * name) {
     return true;
 }
 
+static bool dw_person_name_ok(const char * name) {
+    size_t len = strlen(name);
+    if (!len || len > 60 || name[0] == '.' || name[len - 1] == ' ' || name[len - 1] == '.') return false;
+    for (const unsigned char * c = (const unsigned char *) name; *c; c++)
+        if (*c < 32 || strchr("/\\:*?\"<>|", *c)) return false;
+    return true;
+}
+
+void discworld_each_person(const char * people, void (*fn)(const char * name, void * user), void * user) {
+    if (!people || !fn) return;
+    const char * p = people;
+    while (*p) {
+        const char * comma = strchr(p, ',');
+        size_t n = comma ? (size_t) (comma - p) : strlen(p);
+        while (n && (*p == ' ' || *p == '\t')) { p++; n--; }
+        while (n && (p[n - 1] == ' ' || p[n - 1] == '\t')) n--;
+        char name[64];
+        if (n && n < sizeof(name)) {
+            memcpy(name, p, n);
+            name[n] = '\0';
+            if (dw_person_name_ok(name)) fn(name, user);
+        }
+        if (!comma) break;
+        p = comma + 1;
+    }
+}
+
 /* A playlist this sync wrote, as the record keeps it: relative to Playlists/,
- * either a bare name (builds before Favourites) or in the favourites folder. */
+ * a bare name (the first builds), in the favourites folder, or in a person's
+ * folder inside it. */
 static bool dw_recorded_playlist_ok(const char * entry) {
     static const char * const subs[] = { DISCWORLD_FAVOURITES_DIR "/", DISCWORLD_FAVORITES_DIR "/" };
-    for (size_t i = 0; i < sizeof(subs) / sizeof(subs[0]); i++)
-        if (strncmp(entry, subs[i], strlen(subs[i])) == 0) return dw_playlist_name_ok(entry + strlen(subs[i]));
+    for (size_t i = 0; i < sizeof(subs) / sizeof(subs[0]); i++) {
+        if (strncmp(entry, subs[i], strlen(subs[i])) != 0) continue;
+        const char * rest = entry + strlen(subs[i]);
+        const char * slash = strchr(rest, '/');
+        if (!slash) return dw_playlist_name_ok(rest);
+        char person[64];
+        size_t n = (size_t) (slash - rest);
+        if (n >= sizeof(person)) return false;
+        memcpy(person, rest, n);
+        person[n] = '\0';
+        return dw_person_name_ok(person) && dw_playlist_name_ok(slash + 1);
+    }
     return dw_playlist_name_ok(entry);
 }
 
 /* Discworld writes each song as "../Music/..." from a playlist directly in
- * Playlists/; one folder deeper, every relative entry needs one more "../". */
-static char * dw_playlist_one_level_deeper(const char * text) {
+ * Playlists/; `levels` folders deeper, every relative entry needs that many
+ * more "../". */
+static char * dw_playlist_deeper(const char * text, int levels) {
     size_t lines = 1;
     for (const char * c = text; *c; c++) if (*c == '\n') lines++;
     size_t len = strlen(text);
-    char * out = malloc(len + lines * 3 + 1);
+    char * out = malloc(len + lines * 3 * (size_t) levels + 1);
     if (!out) return NULL;
     char * w = out;
     const char * line = text;
@@ -785,7 +835,8 @@ static char * dw_playlist_one_level_deeper(const char * text) {
         const char * end = strchr(line, '\n');
         size_t n = end ? (size_t) (end - line) + 1 : strlen(line);
         /* A first line may start with the BOM before "#EXTM3U"; songs never do. */
-        if (n >= 3 && line[0] == '.' && line[1] == '.' && line[2] == '/') { memcpy(w, "../", 3); w += 3; }
+        if (n >= 3 && line[0] == '.' && line[1] == '.' && line[2] == '/')
+            for (int i = 0; i < levels; i++) { memcpy(w, "../", 3); w += 3; }
         memcpy(w, line, n);
         w += n;
         line += n;
@@ -830,14 +881,12 @@ static bool dw_write_file_atomic(const char * path, const char * text, size_t le
     return ok;
 }
 
-/* Writes the profile's playlists to Playlists/Favourites/ (the Home
- * Favourites tile reads that folder; an existing Favorites/ spelling is
- * used instead), fresh each time, and deletes the ones this wrote before
- * that Discworld no longer has, including ones older builds put directly in
- * Playlists/. */
-static discworld_status_t dw_sync_playlists(dw_ctx_t * x, dw_state_t * st) {
+/* One person's playlists (or the shared ones when who is empty) into
+ * folder (relative to Playlists/), adding what it wrote to *now. */
+static discworld_status_t dw_sync_person(dw_ctx_t * x, dw_state_t * st, const char * who, const char * folder,
+                                         int levels, char *** now, int * now_count) {
     char path[600] = "/api/hiby/playlists?who=";
-    if (!dw_url_append_encoded(path, sizeof(path), x->config->profile, false)) return DISCWORLD_ERR_ARGUMENT;
+    if (!dw_url_append_encoded(path, sizeof(path), who, false)) return DISCWORLD_ERR_ARGUMENT;
     int status = 0;
     discworld_status_t s = dw_get(x, path, DW_PLAYLISTS_MAX_BYTES, &status);
     if (s != DISCWORLD_OK) return s;
@@ -854,25 +903,13 @@ static discworld_status_t dw_sync_playlists(dw_ctx_t * x, dw_state_t * st) {
         dw_detail(x->result, "%s", "Discworld's playlists could not be read");
         return DISCWORLD_ERR_SERVER;
     }
-    char dir[PATH_MAX], fav[PATH_MAX], other[PATH_MAX];
-    const char * sub = DISCWORLD_FAVOURITES_DIR;
-    struct stat dsb;
-    if (!dw_join(dir, sizeof(dir), x->config->card_root, DISCWORLD_PLAYLISTS_DIR) ||
-        !dw_join(fav, sizeof(fav), dir, DISCWORLD_FAVOURITES_DIR) ||
-        !dw_join(other, sizeof(other), dir, DISCWORLD_FAVORITES_DIR)) {
+    char base[PATH_MAX], dir[PATH_MAX];
+    if (!dw_join(base, sizeof(base), x->config->card_root, DISCWORLD_PLAYLISTS_DIR) ||
+        !dw_join(dir, sizeof(dir), base, folder) || !dw_make_parents(dir) ||
+        (mkdir(dir, 0755) != 0 && errno != EEXIST)) {
         cJSON_Delete(root);
         return DISCWORLD_ERR_CARD;
     }
-    if (stat(fav, &dsb) != 0 && stat(other, &dsb) == 0 && S_ISDIR(dsb.st_mode)) {
-        sub = DISCWORLD_FAVORITES_DIR;
-        snprintf(fav, sizeof(fav), "%s", other);
-    }
-    if ((mkdir(dir, 0755) != 0 && errno != EEXIST) || (mkdir(fav, 0755) != 0 && errno != EEXIST)) {
-        cJSON_Delete(root);
-        return DISCWORLD_ERR_CARD;
-    }
-    char ** now = NULL;
-    int now_count = 0;
     discworld_status_t outcome = DISCWORLD_OK;
     const cJSON * item;
     cJSON_ArrayForEach(item, lists) {
@@ -880,43 +917,86 @@ static discworld_status_t dw_sync_playlists(dw_ctx_t * x, dw_state_t * st) {
         const cJSON * text = cJSON_GetObjectItemCaseSensitive(item, "text");
         if (!cJSON_IsString(file) || !cJSON_IsString(text) || !dw_playlist_name_ok(file->valuestring)) continue;
         /* The user's own playlist of the same name stays: this one gets "(Discworld)". */
-        char name[300], full[PATH_MAX];
-        snprintf(name, sizeof(name), "%s/%s", sub, file->valuestring);
-        if (!dw_join(full, sizeof(full), dir, name)) continue;
-        char * deeper = dw_playlist_one_level_deeper(text->valuestring);
-        if (!deeper) { outcome = DISCWORLD_ERR_MEMORY; break; }
+        char name[400], full[PATH_MAX];
+        snprintf(name, sizeof(name), "%s/%s", folder, file->valuestring);
+        if (!dw_join(full, sizeof(full), base, name)) continue;
+        char * body = dw_playlist_deeper(text->valuestring, levels);
+        if (!body) { outcome = DISCWORLD_ERR_MEMORY; break; }
+        size_t body_len = strlen(body);
         /* A file already holding exactly this text counts as this sync's own
          * (a record lost or rewritten elsewhere must not breed copies). */
-        const char * body = deeper;
-        size_t body_len = strlen(body);
         struct stat sb;
         bool same = dw_file_equals(full, body, body_len);
         bool mine = same || dw_list_has(st->our_playlists, st->our_playlist_count, name);
         if (!mine && stat(full, &sb) == 0) {
             size_t stem = strlen(file->valuestring) - 5;
-            snprintf(name, sizeof(name), "%s/%.*s (Discworld).m3u8", sub, (int) stem, file->valuestring);
-            if (!dw_join(full, sizeof(full), dir, name)) { free(deeper); continue; }
+            snprintf(name, sizeof(name), "%s/%.*s (Discworld).m3u8", folder, (int) stem, file->valuestring);
+            if (!dw_join(full, sizeof(full), base, name)) { free(body); continue; }
             same = dw_file_equals(full, body, body_len);
             mine = same || dw_list_has(st->our_playlists, st->our_playlist_count, name);
-            if (!mine && stat(full, &sb) == 0) { free(deeper); continue; }
+            if (!mine && stat(full, &sb) == 0) { free(body); continue; }
         }
-        if (dw_list_has(now, now_count, name)) { free(deeper); continue; }
+        if (dw_list_has(*now, *now_count, name)) { free(body); continue; }
         if (!same) {
             bool written = dw_write_file_atomic(full, body, body_len);
             int saved = errno;
-            free(deeper);
+            free(body);
             if (!written) {
                 outcome = saved == ENOSPC ? DISCWORLD_ERR_FULL : DISCWORLD_ERR_CARD;
                 break;
             }
             x->result->changed = true;
         } else {
-            free(deeper);
+            free(body);
         }
-        if (!dw_array_push(&now, &now_count, name)) { outcome = DISCWORLD_ERR_MEMORY; break; }
+        if (!dw_array_push(now, now_count, name)) { outcome = DISCWORLD_ERR_MEMORY; break; }
         x->result->playlists++;
     }
     cJSON_Delete(root);
+    return outcome;
+}
+
+typedef struct {
+    dw_ctx_t * x;
+    dw_state_t * st;
+    const char * fav;
+    char *** now;
+    int * now_count;
+    discworld_status_t outcome;
+} dw_people_t;
+
+static void dw_sync_one_person(const char * name, void * user) {
+    dw_people_t * p = user;
+    if (p->outcome != DISCWORLD_OK || dw_stopping(p->x)) return;
+    char folder[128];
+    snprintf(folder, sizeof(folder), "%s/%s", p->fav, name);
+    p->outcome = dw_sync_person(p->x, p->st, name, folder, 2, p->now, p->now_count);
+}
+
+/* Writes the playlists to Playlists/Favourites/ (the Home Favourites tile
+ * reads that folder; an existing Favorites/ spelling is used instead): each
+ * person's into a folder of their own, fresh each time. Then deletes the
+ * ones this wrote before that Discworld no longer has, including ones older
+ * builds put elsewhere. */
+static discworld_status_t dw_sync_playlists(dw_ctx_t * x, dw_state_t * st) {
+    char dir[PATH_MAX], fav[PATH_MAX], other[PATH_MAX];
+    const char * sub = DISCWORLD_FAVOURITES_DIR;
+    struct stat dsb;
+    if (!dw_join(dir, sizeof(dir), x->config->card_root, DISCWORLD_PLAYLISTS_DIR) ||
+        !dw_join(fav, sizeof(fav), dir, DISCWORLD_FAVOURITES_DIR) ||
+        !dw_join(other, sizeof(other), dir, DISCWORLD_FAVORITES_DIR)) return DISCWORLD_ERR_CARD;
+    if (stat(fav, &dsb) != 0 && stat(other, &dsb) == 0 && S_ISDIR(dsb.st_mode)) sub = DISCWORLD_FAVORITES_DIR;
+
+    char ** now = NULL;
+    int now_count = 0;
+    dw_people_t people = { x, st, sub, &now, &now_count, DISCWORLD_OK };
+    bool any = false;
+    for (const char * c = x->config->people; *c; c++) if (*c != ',' && *c != ' ') { any = true; break; }
+    if (any) discworld_each_person(x->config->people, dw_sync_one_person, &people);
+    else people.outcome = dw_sync_person(x, st, "", sub, 1, &now, &now_count);
+    discworld_status_t outcome = people.outcome;
+    if (outcome == DISCWORLD_OK && dw_stopping(x)) outcome = DISCWORLD_STOPPED;
+
     if (outcome != DISCWORLD_OK) {
         /* Keep the old list too, so nothing written is forgotten. */
         for (int i = 0; i < st->our_playlist_count; i++)
@@ -926,7 +1006,11 @@ static discworld_status_t dw_sync_playlists(dw_ctx_t * x, dw_state_t * st) {
         for (int i = 0; i < st->our_playlist_count; i++) {
             if (dw_list_has(now, now_count, st->our_playlists[i]) || !dw_recorded_playlist_ok(st->our_playlists[i])) continue;
             char full[PATH_MAX];
-            if (dw_join(full, sizeof(full), dir, st->our_playlists[i]) && unlink(full) == 0) x->result->changed = true;
+            if (!dw_join(full, sizeof(full), dir, st->our_playlists[i]) || unlink(full) != 0) continue;
+            x->result->changed = true;
+            /* A person taken off the list leaves no empty folder behind. */
+            char * slash = strrchr(full, '/');
+            if (slash) { *slash = '\0'; if (strlen(full) > strlen(fav) + 1) rmdir(full); }
         }
     }
     dw_array_free(&st->our_playlists, &st->our_playlist_count);
@@ -1020,7 +1104,7 @@ static discworld_status_t dw_run(dw_ctx_t * x, dw_state_t * st) {
     for (; i < copy_count; i++) {
         dw_file_t * f = copy[i];
         if (dw_stopping(x)) { outcome = DISCWORLD_STOPPED; break; }
-        snprintf(x->progress.current, sizeof(x->progress.current), "%s", f->c + sizeof(DW_MUSIC_FOLDER));
+        snprintf(x->progress.current, sizeof(x->progress.current), "%s", f->c + dw_top_folder_len(f->c) + 1);
         x->progress.bytes_done = base;
         dw_report(x);
         bool update = f->card_v != NULL;

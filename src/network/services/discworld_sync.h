@@ -8,12 +8,14 @@
  * the same three calls and the same record on the card, so the two never
  * fight over files:
  *
- *   GET /api/hiby/manifest   every song, cover and lyrics file in Music, each
+ *   GET /api/hiby/manifest   every song, cover and lyrics file in Music (and
+ *                            every file in Audiobooks), each
  *                            with the path it goes to on the card (under
- *                            Music/) and a version. 202 while it is listed.
+ *                            Music/ or Audiobooks/) and a version. 202 while
+ *                            it is listed.
  *   GET /api/hiby/file?p=    one file (a song without art gets its folder's
  *                            cover put inside the copy it is sent as).
- *   GET /api/hiby/playlists  the profile's playlists as .m3u8 text whose
+ *   GET /api/hiby/playlists  a profile's playlists as .m3u8 text whose
  *                            entries are "../Music/..." paths.
  *
  *   <card>/.discworld-sync.json  {files: {card path: {p, v}}, playlists: [..],
@@ -24,7 +26,8 @@
  * file that replaces the real one only once complete, and the record is
  * saved every 100 files, so a sync cut short (Wi-Fi gone, charger pulled,
  * Stop) carries on from where it got to next time. Playlists go to
- * <card>/Playlists/Favourites, where compás and its Home Favourites tile read
+ * <card>/Playlists/Favourites/<person>, one folder for each person named in
+ * the config, where compás and its Home Favourites tile read
  * them (the USB page writes playlist_data/ for HiBy's own OS);
  * compas_playlists lists the ones this wrote, relative to Playlists/, and a
  * playlist of the user's own with the same name is never replaced.
@@ -46,7 +49,9 @@
 typedef struct {
     char base_url[256];   /* "http://jarvis.local:8080", no trailing slash */
     char password[128];   /* Discworld's APP_PASSWORD; empty when it has none */
-    char profile[64];     /* whose playlists ("who"); empty: the shared ones */
+    char people[160];     /* whose playlists ("who"), comma separated; each goes to
+                           * Playlists/Favourites/<name>/. Empty: the shared ones,
+                           * straight into Playlists/Favourites/. */
     char card_root[256];  /* the SD card's mount point */
     bool require_mounted; /* refuse when card_root is only the empty mount point (no card in) */
 } discworld_config_t;
@@ -65,7 +70,7 @@ typedef struct {
     int list_done, list_total;
     int files_done, files_total;   /* this phase's files */
     uint64_t bytes_done, bytes_total;
-    char current[160];             /* the song being copied, card path without Music/ */
+    char current[160];             /* the song being copied, card path without Music/ or Audiobooks/ */
 } discworld_progress_t;
 
 typedef enum {
@@ -103,9 +108,14 @@ void discworld_sync_run(const discworld_config_t * config, http_cancel_token_t *
  * given ("jarvis.local:8080" -> "http://jarvis.local:8080"). */
 void discworld_normalize_url(const char * input, char * out, size_t size);
 
-/* A card path the server gave is safe to write or delete: under Music/,
+/* A card path the server gave is safe to write or delete: under Music/ or Audiobooks/,
  * relative, no "." or ".." parts, no backslash or control characters.
  * Exposed for tests. */
 bool discworld_card_path_ok(const char * path);
+
+/* Splits a "Rachel, Phoebe, Amelie" list: calls fn with each trimmed,
+ * non-empty name that is safe as a folder name (others are skipped).
+ * Shared with the Favourites screen so both agree on the folders. */
+void discworld_each_person(const char * people, void (*fn)(const char * name, void * user), void * user);
 
 #endif

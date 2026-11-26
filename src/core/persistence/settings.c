@@ -117,7 +117,7 @@ static const pfield_t plain_fields[] = {
     PF("subsonic_verify_tls", PF_BOOL, subsonic_verify_tls),
     PF("discworld_url", PF_STR, discworld_url),
     PF("discworld_password", PF_STR, discworld_password),
-    PF("discworld_profile", PF_STR, discworld_profile),
+    PF("favorites_people", PF_STR, favorites_people),
     PF("discworld_auto_ssid", PF_STR, discworld_auto_ssid),
     PF("discworld_charging_only", PF_BOOL, discworld_charging_only),
     PF("discworld_last_sync", PF_INT, discworld_last_sync),
@@ -458,7 +458,7 @@ static void set_defaults(player_settings_t * out) {
     out->subsonic_saved_count = 0;
     snprintf(out->discworld_url, sizeof(out->discworld_url), "http://jarvis.local:8080");
     out->discworld_password[0] = '\0';
-    out->discworld_profile[0] = '\0';
+    snprintf(out->favorites_people, sizeof(out->favorites_people), "Rachel, Phoebe, Amelie");
     out->discworld_auto_ssid[0] = '\0';
     out->discworld_charging_only = false;
     out->discworld_last_sync = 0;

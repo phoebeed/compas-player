@@ -12,16 +12,27 @@
 #include "../../../core/persistence/settings.h"
 #include "../../../library/browser/paths/library_paths.h"
 #include "../../../library/metadata/scan/library_scan_storage.h"
+#include "src/misc/cache/instance/lv_image_cache.h"
 #include "../../../library/playlists/list_positions.h"
 #include "../../../library/playlists/playlist_files.h"
+#include "../../../library/artwork/albumart/albumart.h"
+#include "../../../library/artwork/albumart/albumart_info.h"
+#include "../../../library/artwork/cache/image_thumb.h"
+#include "../../../library/artwork/decode/library_artwork_internal.h"
+#include "../../../library/metadata/db/metadata_db.h"
+#include "../../../network/services/discworld_sync.h"
+#include "../../../core/process/worker_thread.h"
 
 #include <limits.h>
+#include <pthread.h>
+#include <stdatomic.h>
 #include <math.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <strings.h>
+#include <unistd.h>
 
 #define FAVORITES_PLAYLISTS_DIR MUSIC_ROOT_DIR "/Playlists"
 /* Either spelling of the favourites folder inside Playlists. */
@@ -31,6 +42,9 @@ static const char * const favorites_dirs[] = {
 };
 
 #define FAVORITES_ROW_HEIGHT BOARD_SCALE_PX(120)
+#define FAVORITES_PERSON_ROW_HEIGHT BOARD_SCALE_PX(150)
+#define FAVORITES_COVER_PX ALBUM_THUMBNAIL_PX
+#define FAVORITES_MAX_PEOPLE 8
 #define FAVORITES_POLL_MS 1000
 /* While playing, the place is written at most this often; a pause, a track
  * change or the end of the list is written at once. */
@@ -39,10 +53,26 @@ static const char * const favorites_dirs[] = {
  * its last track counts as finished (track changes can briefly stop). */
 #define FAVORITES_STOPPED_POLLS 3
 
-static lv_obj_t * favorites_screen;
-static lv_obj_t * favorites_list;
-static char ** favorites_paths;
-static int favorites_count;
+/* One list screen: the top one (people, then loose playlists) or one
+ * person's playlists. Each playlist row has a cover, filled in by a worker. */
+typedef struct {
+    lv_obj_t * screen;
+    lv_obj_t * title;
+    lv_obj_t * list;
+    char ** paths;
+    int count;
+    lv_obj_t ** images;     /* each playlist row's cover image */
+    uint16_t ** pixels;     /* shown covers, owned */
+    lv_image_dsc_t * dscs;
+    struct cover_job * job;
+} fav_view_t;
+
+enum { VIEW_TOP, VIEW_PERSON, VIEW_COUNT };
+static fav_view_t views[VIEW_COUNT];
+static char people[FAVORITES_MAX_PEOPLE][64];
+static int people_count;
+
+static void apply_covers(fav_view_t * v);
 
 /* The favourite list the player queue is currently playing, if any. */
 static struct {
@@ -62,13 +92,6 @@ static struct {
 /* Boot: the restored queue is matched against the list that was playing at
  * most once per queue revision. */
 static uint64_t adopt_checked_revision;
-
-static void free_favorites_paths(void) {
-    for (int i = 0; i < favorites_count; i++) free(favorites_paths[i]);
-    free(favorites_paths);
-    favorites_paths = NULL;
-    favorites_count = 0;
-}
 
 static void format_time(double seconds, char * out, size_t size) {
     long s = seconds > 0 && isfinite(seconds) ? (long) seconds : 0;
@@ -162,6 +185,7 @@ static void try_adopt_restored_queue(void) {
 }
 
 void gui_favorites_poll(void) {
+    for (int i = 0; i < VIEW_COUNT; i++) apply_covers(&views[i]);
     static uint32_t last_poll;
     if (lv_tick_elaps(last_poll) < FAVORITES_POLL_MS) return;
     last_poll = lv_tick_get();
@@ -196,11 +220,179 @@ void gui_favorites_checkpoint(void) {
     if (tracker.on) tracker_record(true);
 }
 
-/* Starts list i: from its saved place, or from the top. */
-static void play_favorite(int i, bool from_start) {
-    if (i < 0 || i >= favorites_count) return;
+/* ---- covers ---------------------------------------------------------------
+ * A playlist's own picture ("<name>.jpg" or .jpeg/.png beside it), else the
+ * album cover of its first song. Decoded on a worker, shown as they land. */
+
+typedef struct cover_job {
+    pthread_t thread;
+    atomic_bool cancel;
+    atomic_bool done;
+    atomic_int ready;        /* covers [0, ready) are decided */
+    int applied;
+    int count;
+    char ** paths;
+    uint16_t ** pixels;
+    int * w;
+    int * h;
+} cover_job_t;
+
+static bool cover_cancel_cb(void * user) {
+    return atomic_load(&((cover_job_t *) user)->cancel);
+}
+
+static bool cover_from_file(cover_job_t * job, const char * file, int i) {
+    uint8_t * data = NULL;
+    uint32_t size = 0;
+    if (albumart_load_file_ex(file, &data, &size, ALBUMART_SIDECAR_MAX_BYTES, ARTWORK_PRIO_THUMBNAIL) !=
+        ALBUMART_LOAD_OK) return false;
+    bool ok = image_thumb_decode(data, size, FAVORITES_COVER_PX, FAVORITES_COVER_PX, ARTWORK_PRIO_THUMBNAIL,
+                                 cover_cancel_cb, job, &job->pixels[i], &job->w[i], &job->h[i], NULL);
+    free(data);
+    return ok && job->pixels[i];
+}
+
+static void cover_find(cover_job_t * job, int i) {
+    const char * list = job->paths[i];
+    /* The playlist's own picture. */
+    static const char * const exts[] = { ".jpg", ".jpeg", ".png", ".JPG", ".PNG" };
+    char stem[PATH_MAX], file[PATH_MAX + 8];
+    snprintf(stem, sizeof(stem), "%s", list);
+    char * dot = strrchr(stem, '.');
+    char * slash = strrchr(stem, '/');
+    if (dot && (!slash || dot > slash)) *dot = '\0';
+    for (size_t e = 0; e < sizeof(exts) / sizeof(exts[0]); e++) {
+        snprintf(file, sizeof(file), "%s%s", stem, exts[e]);
+        if (access(file, R_OK) == 0 && cover_from_file(job, file, i)) return;
+        if (atomic_load(&job->cancel)) return;
+    }
+    /* Else the first song's album cover. */
+    char ** songs = NULL;
+    int count = 0;
+    if (!playlist_files_read(list, &songs, &count) || count <= 0) goto out;
+    song_row_t row;
+    if (metadata_db_get_song_by_path(songs[0], &row)) {
+        uint16_t * px = NULL;
+        if (album_thumbnail_load_or_decode_ex(&row, ARTWORK_PRIO_THUMBNAIL, cover_cancel_cb, job, &px) && px) {
+            job->pixels[i] = px;
+            job->w[i] = job->h[i] = ALBUM_THUMBNAIL_PX;
+            goto out;
+        }
+        free(px);
+    }
+    /* Not in the library yet (just synced): its folder's cover file. */
+    if (!atomic_load(&job->cancel)) {
+        albumart_info_t info;
+        albumart_info_from_path_tags(songs[0], "", "", "", &info);
+        if (albumart_search_source_files(&info, "", file, sizeof(file))) cover_from_file(job, file, i);
+    }
+out:
+    for (int k = 0; k < count; k++) free(songs[k]);
+    free(songs);
+}
+
+static void * cover_thread(void * arg) {
+    cover_job_t * job = arg;
+    worker_lower_priority(WORKER_NICE_BACKGROUND);
+    for (int i = 0; i < job->count && !atomic_load(&job->cancel); i++) {
+        cover_find(job, i);
+        atomic_store(&job->ready, i + 1);
+    }
+    atomic_store(&job->done, true);
+    return NULL;
+}
+
+static void cover_job_free(cover_job_t * job) {
+    if (!job) return;
+    atomic_store(&job->cancel, true);
+    pthread_join(job->thread, NULL);
+    for (int i = 0; i < job->count; i++) { free(job->paths[i]); free(job->pixels[i]); }
+    free(job->paths);
+    free(job->pixels);
+    free(job->w);
+    free(job->h);
+    free(job);
+}
+
+static void cover_job_start(fav_view_t * v) {
+    if (!v->count) return;
+    cover_job_t * job = calloc(1, sizeof(*job));
+    if (!job) return;
+    job->count = v->count;
+    job->paths = calloc((size_t) v->count, sizeof(char *));
+    job->pixels = calloc((size_t) v->count, sizeof(uint16_t *));
+    job->w = calloc((size_t) v->count, sizeof(int));
+    job->h = calloc((size_t) v->count, sizeof(int));
+    bool ok = job->paths && job->pixels && job->w && job->h;
+    for (int i = 0; ok && i < v->count; i++) ok = (job->paths[i] = strdup(v->paths[i])) != NULL;
+    pthread_attr_t attr;
+    pthread_attr_init(&attr);
+    pthread_attr_setstacksize(&attr, 256 * 1024);
+    if (ok && pthread_create(&job->thread, &attr, cover_thread, job) == 0) {
+        v->job = job;
+    } else {
+        for (int i = 0; i < job->count; i++) if (job->paths) free(job->paths[i]);
+        free(job->paths); free(job->pixels); free(job->w); free(job->h); free(job);
+    }
+    pthread_attr_destroy(&attr);
+}
+
+static void apply_covers(fav_view_t * v) {
+    cover_job_t * job = v->job;
+    if (!job) return;
+    int ready = atomic_load(&job->ready);
+    for (; job->applied < ready; job->applied++) {
+        int i = job->applied;
+        if (!job->pixels[i] || !v->images || !v->images[i]) continue;
+        v->pixels[i] = job->pixels[i];
+        job->pixels[i] = NULL;
+        lv_image_dsc_t * d = &v->dscs[i];
+        memset(d, 0, sizeof(*d));
+        d->header.magic = LV_IMAGE_HEADER_MAGIC;
+        d->header.cf = LV_COLOR_FORMAT_RGB565;
+        d->header.w = (uint32_t) job->w[i];
+        d->header.h = (uint32_t) job->h[i];
+        d->header.stride = (uint32_t) job->w[i] * 2;
+        d->data_size = (uint32_t) job->w[i] * (uint32_t) job->h[i] * 2;
+        d->data = (const uint8_t *) v->pixels[i];
+        lv_image_set_src(v->images[i], d);
+    }
+    if (atomic_load(&job->done) && job->applied >= job->count) {
+        cover_job_free(job);
+        v->job = NULL;
+    }
+}
+
+/* Drops a view's rows' data (the rows themselves go with lv_obj_clean). */
+static void view_clear(fav_view_t * v) {
+    cover_job_free(v->job);
+    v->job = NULL;
+    for (int i = 0; i < v->count; i++) {
+        if (v->images && v->images[i]) lv_image_set_src(v->images[i], NULL);
+        if (v->pixels && v->pixels[i]) {
+            lv_image_cache_drop(&v->dscs[i]);
+            free(v->pixels[i]);
+        }
+        free(v->paths[i]);
+    }
+    free(v->paths);
+    free(v->images);
+    free(v->pixels);
+    free(v->dscs);
+    v->paths = NULL;
+    v->images = NULL;
+    v->pixels = NULL;
+    v->dscs = NULL;
+    v->count = 0;
+    if (v->list) lv_obj_clean(v->list);
+}
+
+/* ---- playing --------------------------------------------------------------- */
+
+/* Starts a list: from its saved place, or from the top. */
+static void play_favorite(const char * path, bool from_start) {
     char list[PATH_MAX];
-    snprintf(list, sizeof(list), "%s", favorites_paths[i]);
+    snprintf(list, sizeof(list), "%s", path);
     char ** songs = NULL;
     int count = 0;
     bool read = playlist_files_read(list, &songs, &count);
@@ -247,27 +439,17 @@ static void play_favorite(int i, bool from_start) {
 
 static void favorite_row_cb(lv_event_t * e) {
     lv_event_code_t code = lv_event_get_code(e);
-    int i = (int) (intptr_t) lv_event_get_user_data(e);
-    if (code == LV_EVENT_SHORT_CLICKED) play_favorite(i, false);
-    else if (code == LV_EVENT_LONG_PRESSED) play_favorite(i, true);
+    intptr_t tag = (intptr_t) lv_event_get_user_data(e);
+    fav_view_t * v = &views[tag >> 16];
+    int i = (int) (tag & 0xffff);
+    if (i < 0 || i >= v->count) return;
+    if (code == LV_EVENT_SHORT_CLICKED) play_favorite(v->paths[i], false);
+    else if (code == LV_EVENT_LONG_PRESSED) play_favorite(v->paths[i], true);
 }
 
-static void add_favorite_row(int i) {
-    char name[256];
-    list_display_name(favorites_paths[i], name, sizeof(name));
-
-    char detail[160];
-    list_position_t saved;
-    if (list_positions_get(favorites_paths[i], &saved) && saved.track_index >= 0) {
-        char time[32];
-        format_time(saved.position, time, sizeof(time));
-        snprintf(detail, sizeof(detail), TR("Resume track %d at %s"), saved.track_index + 1, time);
-    } else {
-        snprintf(detail, sizeof(detail), "%s", TR("Play from the start"));
-    }
-
-    lv_obj_t * row = lv_obj_create(favorites_list);
-    lv_obj_set_size(row, LIST_ROW_WIDTH_WIDE, FAVORITES_ROW_HEIGHT);
+static lv_obj_t * add_big_row(lv_obj_t * list, int32_t height) {
+    lv_obj_t * row = lv_obj_create(list);
+    lv_obj_set_size(row, LIST_ROW_WIDTH_WIDE, height);
     lv_obj_add_style(row, &native_row_min_style, 0);
     lv_obj_add_style(row, &pill_row_bg_style, 0);
     lv_obj_add_style(row, &list_row_pressed_style, LV_STATE_PRESSED);
@@ -275,17 +457,18 @@ static void add_favorite_row(int i) {
     lv_obj_set_style_pad_all(row, 0, 0);
     lv_obj_remove_flag(row, LV_OBJ_FLAG_SCROLLABLE);
     lv_obj_add_flag(row, LV_OBJ_FLAG_CLICKABLE);
-    lv_obj_add_event_cb(row, favorite_row_cb, LV_EVENT_SHORT_CLICKED, (void *) (intptr_t) i);
-    lv_obj_add_event_cb(row, favorite_row_cb, LV_EVENT_LONG_PRESSED, (void *) (intptr_t) i);
+    return row;
+}
 
-    int32_t text_w = LIST_ROW_WIDTH_WIDE - 2 * GUI_TEXT_INSET;
+static void add_row_text(lv_obj_t * row, const char * name, const char * detail, int32_t left, int font_role) {
+    int32_t text_w = LIST_ROW_WIDTH_WIDE - left - GUI_TEXT_INSET;
     lv_obj_t * title = lv_label_create(row);
     lv_label_set_text(title, name);
     lv_obj_add_style(title, &style_theme_text_primary, 0);
-    lv_obj_set_style_text_font(title, gui_theme_font(GUI_FONT_ROLE_TITLE), 0);
+    lv_obj_set_style_text_font(title, gui_theme_font(font_role), 0);
     lv_label_set_long_mode(title, LV_LABEL_LONG_DOT);
     lv_obj_set_width(title, text_w);
-    lv_obj_align(title, LV_ALIGN_LEFT_MID, GUI_TEXT_INSET, -BOARD_SCALE_PX(16));
+    lv_obj_align(title, LV_ALIGN_LEFT_MID, left, -BOARD_SCALE_PX(16));
 
     lv_obj_t * sub = lv_label_create(row);
     lv_label_set_text(sub, detail);
@@ -293,54 +476,181 @@ static void add_favorite_row(int i) {
     lv_obj_set_style_text_font(sub, gui_theme_font(GUI_FONT_ROLE_BODY), 0);
     lv_label_set_long_mode(sub, LV_LABEL_LONG_DOT);
     lv_obj_set_width(sub, text_w);
-    lv_obj_align(sub, LV_ALIGN_LEFT_MID, GUI_TEXT_INSET, BOARD_SCALE_PX(24));
+    lv_obj_align(sub, LV_ALIGN_LEFT_MID, left, BOARD_SCALE_PX(24));
+}
+
+static void add_favorite_row(int view, int i) {
+    fav_view_t * v = &views[view];
+    char name[256];
+    list_display_name(v->paths[i], name, sizeof(name));
+
+    char detail[160];
+    list_position_t saved;
+    if (list_positions_get(v->paths[i], &saved) && saved.track_index >= 0) {
+        char time[32];
+        format_time(saved.position, time, sizeof(time));
+        snprintf(detail, sizeof(detail), TR("Resume track %d at %s"), saved.track_index + 1, time);
+    } else {
+        snprintf(detail, sizeof(detail), "%s", TR("Play from the start"));
+    }
+
+    lv_obj_t * row = add_big_row(v->list, FAVORITES_ROW_HEIGHT);
+    void * tag = (void *) (((intptr_t) view << 16) | i);
+    lv_obj_add_event_cb(row, favorite_row_cb, LV_EVENT_SHORT_CLICKED, tag);
+    lv_obj_add_event_cb(row, favorite_row_cb, LV_EVENT_LONG_PRESSED, tag);
+
+    /* The cover's place, a quiet square until the picture lands. */
+    int32_t box = FAVORITES_COVER_PX;
+    lv_obj_t * frame = lv_obj_create(row);
+    lv_obj_remove_style_all(frame);
+    lv_obj_set_size(frame, box, box);
+    lv_obj_set_style_radius(frame, BOARD_SCALE_PX(10), 0);
+    lv_obj_set_style_clip_corner(frame, true, 0);
+    lv_obj_set_style_bg_color(frame, lv_color_hex(0x808080), 0);
+    lv_obj_set_style_bg_opa(frame, LV_OPA_20, 0);
+    lv_obj_remove_flag(frame, LV_OBJ_FLAG_CLICKABLE | LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_add_flag(frame, LV_OBJ_FLAG_EVENT_BUBBLE);
+    lv_obj_align(frame, LV_ALIGN_LEFT_MID, GUI_TEXT_INSET, 0);
+    lv_obj_t * image = lv_image_create(frame);
+    lv_obj_center(image);
+    v->images[i] = image;
+
+    add_row_text(row, name, detail, GUI_TEXT_INSET + box + BOARD_SCALE_PX(20), GUI_FONT_ROLE_TITLE);
+}
+
+/* Fills a view with the playlists found in `dirs` (first that has any). */
+static void view_fill(int view, const char * const * dirs, int dir_count) {
+    fav_view_t * v = &views[view];
+    for (int d = 0; d < dir_count && !v->count; d++)
+        if (!playlist_files_scan(dirs[d], &v->paths, &v->count)) { v->paths = NULL; v->count = 0; }
+}
+
+static bool view_alloc_rows(fav_view_t * v) {
+    if (!v->count) return true;
+    v->images = calloc((size_t) v->count, sizeof(lv_obj_t *));
+    v->pixels = calloc((size_t) v->count, sizeof(uint16_t *));
+    v->dscs = calloc((size_t) v->count, sizeof(lv_image_dsc_t));
+    return v->images && v->pixels && v->dscs;
+}
+
+static void view_add_rows(int view) {
+    fav_view_t * v = &views[view];
+    if (!view_alloc_rows(v)) return;
+    for (int i = 0; i < v->count; i++) add_favorite_row(view, i);
+    cover_job_start(v);
+}
+
+static void person_dirs(const char * name, char out[2][PATH_MAX]) {
+    for (int d = 0; d < 2; d++) snprintf(out[d], PATH_MAX, "%s/%s", favorites_dirs[d], name);
+}
+
+static void populate_person_screen(int p) {
+    fav_view_t * v = &views[VIEW_PERSON];
+    view_clear(v);
+    lv_label_set_text(v->title, people[p]);
+    char dirs[2][PATH_MAX];
+    person_dirs(people[p], dirs);
+    const char * list[2] = { dirs[0], dirs[1] };
+    view_fill(VIEW_PERSON, list, 2);
+    if (!v->count) {
+        char detail[200];
+        snprintf(detail, sizeof(detail), TR("Discworld sync puts %s's playlists here."), people[p]);
+        build_list_message(v->list, TR("No playlists yet"), detail);
+        return;
+    }
+    view_add_rows(VIEW_PERSON);
+}
+
+static void person_row_cb(lv_event_t * e) {
+    if (lv_event_get_code(e) != LV_EVENT_CLICKED) return;
+    int p = (int) (intptr_t) lv_event_get_user_data(e);
+    if (p < 0 || p >= people_count || !views[VIEW_PERSON].screen) return;
+    populate_person_screen(p);
+    lv_obj_scroll_to_y(views[VIEW_PERSON].list, 0, LV_ANIM_OFF);
+    nav_push(views[VIEW_PERSON].screen);
+}
+
+static void add_person(const char * name, void * user) {
+    (void) user;
+    if (people_count >= FAVORITES_MAX_PEOPLE) return;
+    for (int i = 0; i < people_count; i++) if (strcasecmp(people[i], name) == 0) return;
+    snprintf(people[people_count++], sizeof(people[0]), "%s", name);
+}
+
+static void add_person_row(int p) {
+    char dirs[2][PATH_MAX];
+    person_dirs(people[p], dirs);
+    char ** paths = NULL;
+    int count = 0;
+    for (int d = 0; d < 2 && !count; d++)
+        if (!playlist_files_scan(dirs[d], &paths, &count)) { paths = NULL; count = 0; }
+    for (int i = 0; i < count; i++) free(paths[i]);
+    free(paths);
+
+    char detail[64];
+    if (count == 1) snprintf(detail, sizeof(detail), "%s", TR("1 playlist"));
+    else if (count) snprintf(detail, sizeof(detail), TR("%d playlists"), count);
+    else snprintf(detail, sizeof(detail), "%s", TR("No playlists yet"));
+
+    lv_obj_t * row = add_big_row(views[VIEW_TOP].list, FAVORITES_PERSON_ROW_HEIGHT);
+    lv_obj_add_event_cb(row, person_row_cb, LV_EVENT_CLICKED, (void *) (intptr_t) p);
+    add_row_text(row, people[p], detail, GUI_TEXT_INSET + BOARD_SCALE_PX(8), GUI_FONT_ROLE_TITLE);
 }
 
 static void populate_favorites_screen(void) {
-    lv_obj_clean(favorites_list);
-    free_favorites_paths();
+    fav_view_t * v = &views[VIEW_TOP];
+    view_clear(v);
+    people_count = 0;
+    discworld_each_person(current_settings.favorites_people, add_person, NULL);
 
     if (!sd_card_root_is_mounted()) {
-        build_list_message(favorites_list, TR("SD card not available"), "");
+        build_list_message(v->list, TR("SD card not available"), "");
         return;
     }
-    for (size_t d = 0; d < sizeof(favorites_dirs) / sizeof(favorites_dirs[0]) && !favorites_count; d++)
-        if (!playlist_files_scan(favorites_dirs[d], &favorites_paths, &favorites_count)) favorites_count = 0;
-    if (!favorites_count && !playlist_files_scan(FAVORITES_PLAYLISTS_DIR, &favorites_paths, &favorites_count))
-        favorites_count = 0;
+    for (int p = 0; p < people_count; p++) add_person_row(p);
 
-    if (!favorites_count) {
-        build_list_message(favorites_list, TR("No playlists"),
+    /* Playlists straight in the favourites folder; with no people set, every
+     * playlist in Playlists when that folder has none. */
+    view_fill(VIEW_TOP, favorites_dirs, 2);
+    if (!v->count && !people_count) {
+        const char * all[1] = { FAVORITES_PLAYLISTS_DIR };
+        view_fill(VIEW_TOP, all, 1);
+    }
+    if (!v->count && !people_count) {
+        build_list_message(v->list, TR("No playlists"),
                            TR("Put playlists in the SD card's Playlists/Favourites folder."));
         return;
     }
-    for (int i = 0; i < favorites_count; i++) add_favorite_row(i);
+    view_add_rows(VIEW_TOP);
 }
 
-static lv_obj_t * build_favorites_screen(void) {
-    lv_obj_t * title_label;
-    lv_obj_t * scr = build_subsonic_list_screen(TR("Favorites"), &title_label, &favorites_list);
-    lv_obj_set_flex_align(favorites_list, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
-    lv_obj_set_style_pad_row(favorites_list, BOARD_SCALE_PX(12), 0);
-    return scr;
+static void build_view(int view, const char * title) {
+    fav_view_t * v = &views[view];
+    v->screen = build_subsonic_list_screen(title, &v->title, &v->list);
+    if (!v->screen) return;
+    lv_obj_set_flex_align(v->list, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+    lv_obj_set_style_pad_row(v->list, BOARD_SCALE_PX(12), 0);
 }
 
 void gui_favorites_home_tile_cb(lv_event_t * e) {
-    if (lv_event_get_code(e) != LV_EVENT_CLICKED || !favorites_screen) return;
+    if (lv_event_get_code(e) != LV_EVENT_CLICKED || !views[VIEW_TOP].screen) return;
     populate_favorites_screen();
-    lv_obj_scroll_to_y(favorites_list, 0, LV_ANIM_OFF);
-    nav_push(favorites_screen);
+    lv_obj_scroll_to_y(views[VIEW_TOP].list, 0, LV_ANIM_OFF);
+    nav_push(views[VIEW_TOP].screen);
 }
 
 bool gui_favorites_init(void) {
     list_positions_load();
-    favorites_screen = build_favorites_screen();
-    return favorites_screen != NULL;
+    build_view(VIEW_TOP, TR("Favorites"));
+    build_view(VIEW_PERSON, TR("Favorites"));
+    return views[VIEW_TOP].screen != NULL && views[VIEW_PERSON].screen != NULL;
 }
 
 void gui_favorites_teardown(void) {
     if (tracker.on) tracker_record(true);
-    free_favorites_paths();
-    if (favorites_screen) { lv_obj_delete(favorites_screen); favorites_screen = NULL; }
-    favorites_list = NULL;
+    for (int i = 0; i < VIEW_COUNT; i++) {
+        view_clear(&views[i]);
+        if (views[i].screen) lv_obj_delete(views[i].screen);
+        memset(&views[i], 0, sizeof(views[i]));
+    }
 }
