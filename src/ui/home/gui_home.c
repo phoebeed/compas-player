@@ -8,6 +8,8 @@
 #include "../network/gui_network.h"
 #include "../shell/gui_shell.h"
 #include "../library/collections/gui_books.h"
+#include "../library/favorites/gui_favorites.h"
+#include "favorites_icon.h"
 #include "../network/subsonic/gui_subsonic.h"
 #include "../../plugins/manager/plugin_manager.h"
 #include "../text/i18n/i18n.h"
@@ -20,7 +22,7 @@
  * validates a Lua `key` string against this same array rather than keeping
  * its own copy that could drift out of sync. */
 const char * const home_layout_tile_keys[HOME_LAYOUT_TILE_COUNT] = {
-    "music", "stream_media", "wireless", "books", "settings", "dac", "subsonic",
+    "music", "stream_media", "wireless", "books", "settings", "dac", "favorites", "subsonic",
 };
 
 /* Native per-tile metadata, same fixed order as home_layout_tile_keys[]
@@ -119,8 +121,8 @@ static const home_tile_override_t * find_home_tile_override(const char * key) {
     return NULL;
 }
 
-/* Resolves home_layout_config.order[] (or, when unconfigured, today's fixed
- * 6-native-tile order) into `out`, which must have room for
+/* Resolves home_layout_config.order[] (or, when unconfigured, the fixed native
+ * order, HOME_LAYOUT_DEFAULT_TILE_COUNT tiles) into `out`, which must have room for
  * HOME_LAYOUT_MAX_TILES entries. Returns how many entries were actually
  * filled -- can be less than the order length when an entry names neither a
  * native key nor a currently-registered plugin tile id (that plugin failed
@@ -232,6 +234,8 @@ lv_obj_t * gui_home_build_screen(lv_event_cb_t settings_cb, lv_event_cb_t stream
         { "launcher/book.png", "launcher/book_s.png", N_("Books"), gui_books_home_tile_cb },
         { "launcher/sys_set.png", "launcher/sys_set_s.png", N_("Settings"), settings_cb },
         { "launcher/dac.png", "launcher/dac_s.png", N_("More"), dac_home_tile_cb },
+        /* List mode uses the stock heart; the tile grid draws favorites_icon. */
+        { "playing_plane/collect_in.png", NULL, N_("Favorites"), gui_favorites_home_tile_cb },
         { "stream_media/subsonic.png", "stream_media/subsonic_s.png", N_("Subsonic"), subsonic_tile_cb },
     };
     static resolved_home_tile_t resolved[HOME_LAYOUT_MAX_TILES];
@@ -318,13 +322,18 @@ lv_obj_t * gui_home_build_screen(lv_event_cb_t settings_cb, lv_event_cb_t stream
             .has_radius = ov->has_radius,
             .radius = home_tile_radius(ov, display_width),
         };
+        if (resolved[i].on_click == gui_favorites_home_tile_cb) {
+            items[i].icon_src = &favorites_icon;
+            items[i].span_row = true; /* the odd seventh tile fills the bottom row */
+        }
     }
     /* No back_btn_cb -- this is the true root, nothing to go back to. No
      * title either -- matches the real stock launcher, which has no header
      * text above its icon grid. tile_gap is 0 unless a plugin configured one;
      * build_icon_grid_screen() floors it at the card gap. l_plugin_set_home_layout()
-     * already rejects a tile-mode `order` past 6 entries, so `count` here
-     * never exceeds what build_icon_grid_screen()'s own row math expects. */
+     * already rejects a tile-mode `order` past 6 entries; the native default
+     * has 7 (with Favorites), which build_icon_grid_screen() fits as 4
+     * shorter rows. */
     int32_t home_icon_scale =
 #if defined(BOARD_TEMPOTEC_V1)
         72;
