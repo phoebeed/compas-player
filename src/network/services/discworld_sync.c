@@ -51,6 +51,22 @@ static void dw_detail(discworld_result_t * r, const char * fmt, const char * arg
     snprintf(r->detail, sizeof(r->detail), fmt, arg ? arg : "");
 }
 
+/* The host of "scheme://host[:port][/...]", lower-cased as given. */
+static bool dw_url_host(const char * url, char * out, size_t size) {
+    const char * h = strstr(url, "://");
+    h = h ? h + 3 : url;
+    size_t n = strcspn(h, ":/");
+    if (!n || n >= size) return false;
+    memcpy(out, h, n);
+    out[n] = '\0';
+    return true;
+}
+
+static bool dw_is_ip(const char * host) {
+    struct in_addr a;
+    return inet_pton(AF_INET, host, &a) == 1;
+}
+
 void discworld_normalize_url(const char * input, char * out, size_t size) {
     if (!out || !size) return;
     out[0] = '\0';
@@ -631,6 +647,15 @@ static discworld_status_t dw_get(dw_ctx_t * x, const char * path, size_t max_byt
             return dw_stopping(x) ? DISCWORLD_STOPPED : DISCWORLD_ERR_CONNECT;
         }
         int status = x->resp->status;
+        if (status >= 300 && status < 400) {
+            const char * to = http_headers_get(x->resp->headers, x->resp->header_count, "Location");
+            if (to && strncasecmp(to, "https://", 8) == 0 && strncasecmp(x->config->base_url, "http://", 7) == 0) {
+                /* Discworld behind a proxy that sends http to https: look for it there. */
+                http_response_free(x->resp);
+                dw_detail(x->result, "%s", "it only answers on https");
+                return DISCWORLD_ERR_CONNECT;
+            }
+        }
         bool sign_in = status == 401 || (status >= 300 && status < 400);
         if (sign_in && attempt == 0) {
             http_response_free(x->resp);
@@ -1262,7 +1287,11 @@ static int dw_scan_network(dw_ctx_t * x, char urls[][64], int max) {
         if (!(i->ifa_flags & IFF_UP) || (i->ifa_flags & IFF_LOOPBACK)) continue;
         uint32_t ip = ntohl(((struct sockaddr_in *) i->ifa_addr)->sin_addr.s_addr);
         /* home networks only: 10/8, 172.16/12, 192.168/16 */
-        if (!((ip >> 24) == 10 || (ip >> 20) == 0xAC1 || (ip >> 16) == 0xC0A8)) continue;
+        bool home = (ip >> 24) == 10 || (ip >> 20) == 0xAC1 || (ip >> 16) == 0xC0A8;
+#ifdef HOST_BUILD
+        if (getenv("DW_TEST_SCAN_ANY")) home = true; /* the test network is not a home range */
+#endif
+        if (!home) continue;
         self = ip;
         mask = ntohl(((struct sockaddr_in *) i->ifa_netmask)->sin_addr.s_addr);
         break;
@@ -1280,7 +1309,11 @@ static int dw_scan_network(dw_ctx_t * x, char urls[][64], int max) {
     for (size_t pi = 0; pi < sizeof(scan_ports) / sizeof(scan_ports[0]); pi++) {
         for (uint32_t h = 1; h + 1 < count && nhits < DW_SCAN_MAX_FOUND; h++) {
             uint32_t ip = net + h;
-            if (ip == self) continue;
+            bool skip_self = true;
+#ifdef HOST_BUILD
+            if (getenv("DW_TEST_SCAN_ANY")) skip_self = false; /* the test server runs here */
+#endif
+            if (ip == self && skip_self) continue;
             ips[n] = ip;
             ports[n] = scan_ports[pi];
             if (++n == DW_SCAN_BATCH) {
@@ -1312,11 +1345,16 @@ static bool dw_discover(dw_ctx_t * x, discworld_result_t * r) {
         if (port == 80) snprintf(candidates[n++], sizeof(candidates[0]), "http://%s", target);
         else snprintf(candidates[n++], sizeof(candidates[0]), "http://%s:%u", target, (unsigned) port);
     }
-    static const char * const usual[] = {
-        "http://discworld.local:8080", "http://discworld.local", "https://discworld.local",
-        "http://jarvis.local:8080", "http://jarvis.local", "https://jarvis.local",
+    char https_set[160] = "";
+    char set_host[128];
+    if (dw_url_host(x->config->base_url, set_host, sizeof(set_host)) && strncmp(x->config->base_url, "https://", 8) != 0)
+        snprintf(https_set, sizeof(https_set), "https://%s", set_host);
+    const char * usual[] = {
+        https_set, "https://discworld.local", "https://jarvis.local",
+        "http://discworld.local:8080", "http://discworld.local", "http://jarvis.local:8080", "http://jarvis.local",
     };
     for (size_t i = 0; i < sizeof(usual) / sizeof(usual[0]) && n < 8; i++) {
+        if (!usual[i][0]) continue;
         bool dup = false;
         for (int k = 0; k < n; k++) if (strcmp(candidates[k], usual[i]) == 0) dup = true;
         if (!dup && strcmp(usual[i], x->config->base_url) != 0)
@@ -1338,8 +1376,28 @@ static bool dw_discover(dw_ctx_t * x, discworld_result_t * r) {
     /* Then anything on the home network that answers like Discworld. */
     char found[DW_SCAN_MAX_FOUND][64];
     int nf = dw_stopping(x) ? 0 : dw_scan_network(x, found, DW_SCAN_MAX_FOUND);
+    /* An https server behind a proxy (Caddy) answers only under its name, so
+     * each https address is also tried as the usual names, pinned to it. */
+    const char * names[3] = { NULL, "discworld.local", "jarvis.local" };
+    if (set_host[0] && !dw_is_ip(set_host) && strcasecmp(set_host, "discworld.local") && strcasecmp(set_host, "jarvis.local"))
+        names[0] = set_host;
     for (int i = 0; i < nf && !dw_stopping(x); i++) {
         char why[120];
+        if (strncmp(found[i], "https://", 8) == 0) {
+            const char * ip = found[i] + 8;
+            for (int k = 0; k < 3 && !dw_stopping(x); k++) {
+                if (!names[k]) continue;
+                char url[160];
+                snprintf(url, sizeof(url), "https://%s", names[k]);
+                http_pin_host(names[k], ip);
+                if (dw_probe(x, url, why, sizeof(why))) {
+                    snprintf(r->found_url, sizeof(r->found_url), "%s", url);
+                    snprintf(r->found_ip, sizeof(r->found_ip), "%s", ip);
+                    return true;
+                }
+                http_pin_host(names[k], NULL);
+            }
+        }
         if (dw_probe(x, found[i], why, sizeof(why))) {
             snprintf(r->found_url, sizeof(r->found_url), "%s", found[i]);
             return true;
@@ -1372,6 +1430,9 @@ void discworld_sync_run(const discworld_config_t * config, http_cancel_token_t *
         dw_detail(r, "%s", "No SD card");
         return;
     }
+    char host[128] = "";
+    bool pinned = config->pin_ip[0] && dw_url_host(config->base_url, host, sizeof(host)) && !dw_is_ip(host);
+    if (pinned) http_pin_host(host, config->pin_ip);
     dw_ctx_t x = { .config = config, .cancel = cancel, .keep_going = keep_going, .progress_fn = progress,
                    .user = user, .result = r };
     x.req = calloc(1, sizeof(*x.req));
@@ -1385,14 +1446,18 @@ void discworld_sync_run(const discworld_config_t * config, http_cancel_token_t *
         snprintf(first, sizeof(first), "%s: %s", config->base_url, r->detail);
         snprintf(r->detail, sizeof(r->detail), "%s", first);
         discworld_config_t found = *config;
+        if (pinned) http_pin_host(host, NULL); /* the kept address may be old: let names try again */
         if (dw_discover(&x, r)) {
             snprintf(found.base_url, sizeof(found.base_url), "%s", r->found_url);
-            char keep[sizeof(r->found_url)];
+            char keep[sizeof(r->found_url)], keep_ip[sizeof(r->found_ip)];
             snprintf(keep, sizeof(keep), "%s", r->found_url);
+            snprintf(keep_ip, sizeof(keep_ip), "%s", r->found_ip);
             dw_state_free(&st);
             memset(&st, 0, sizeof(st));
             memset(r, 0, sizeof(*r));
             snprintf(r->found_url, sizeof(r->found_url), "%s", keep);
+            snprintf(r->found_ip, sizeof(r->found_ip), "%s", keep_ip);
+            snprintf(found.pin_ip, sizeof(found.pin_ip), "%s", keep_ip);
             x.config = &found;
             x.cookie[0] = '\0';
             r->status = dw_run(&x, &st);
