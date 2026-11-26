@@ -10,6 +10,7 @@
 #include "../parsing/metadata.h"
 #include "../catalog/metadata_refresh_targets.h"
 #include "../../tagcache/core/tagcache.h"
+#include "../../../core/system/lifecycle/dir_fd_path.h"
 
 #include <dirent.h>
 #include <errno.h>
@@ -25,6 +26,15 @@
 #include <sys/stat.h>
 #include <unistd.h>
 #include <sys/prctl.h>
+
+/* path under the music root open on root_fd: suffix is "" or starts with '/'.
+ * Through dir_fd_path(), so the walk stays on the directory it opened. */
+static bool root_fd_join(int root_fd, const char * suffix, char * out, size_t size) {
+    char root[PATH_MAX];
+    if (!dir_fd_path(root_fd, root, sizeof(root))) return false;
+    int n = snprintf(out, size, "%s%s", root, suffix);
+    return n > 0 && (size_t) n < size;
+}
 
 #define LIBRARY_SCAN_FILE_TIMEOUT_MS 5000
 #define LIBRARY_SCAN_WALK_STALL_TIMEOUT_MS 30000
@@ -127,10 +137,9 @@ static bool scan_spool_visit_cb(const char * path, void * user) {
     FILE * f = ctx->spool;
     if (atomic_load_explicit(ctx->cancel, memory_order_acquire)) return false;
     char logical[PATH_MAX];
-    char prefix[64];
-    snprintf(prefix, sizeof(prefix), "/proc/self/fd/%d", ctx->root_fd);
+    char prefix[PATH_MAX];
     const char * p = path;
-    if (strncmp(path, prefix, strlen(prefix)) == 0) {
+    if (dir_fd_path(ctx->root_fd, prefix, sizeof(prefix)) && strncmp(path, prefix, strlen(prefix)) == 0) {
         snprintf(logical, sizeof(logical), "%s%s", MUSIC_ROOT_DIR, path + strlen(prefix));
         p = logical;
     }
@@ -171,7 +180,7 @@ static bool scan_all_songs_with_timeout(const char * root, int * out_spool_fd,
     if (!w) return false;
     w->root_fd = open(root, O_RDONLY | O_DIRECTORY | O_CLOEXEC);
     if (w->root_fd < 0) { free(w); return false; }
-    snprintf(w->root, sizeof(w->root), "/proc/self/fd/%d", w->root_fd);
+    if (!dir_fd_path(w->root_fd, w->root, sizeof(w->root))) { close(w->root_fd); free(w); return false; }
     w->spool_fd = openat(w->root_fd, ".compas_scan.tmp", O_RDWR | O_CREAT | O_EXCL | O_CLOEXEC, 0600);
     if (w->spool_fd < 0) { close(w->root_fd); free(w); return false; }
     unlinkat(w->root_fd, ".compas_scan.tmp", 0);
@@ -269,7 +278,7 @@ static bool library_scan_unchanged_fast_path(int spool_fd, int root_fd, int disc
         if (!scan_spool_read_path(spool, path, sizeof(path)) || path[0] == '\0' ||
             strncmp(path, MUSIC_ROOT_DIR, root_len) != 0 ||
             (path[root_len] != '/' && path[root_len] != '\0') ||
-            snprintf(actual, sizeof(actual), "/proc/self/fd/%d%s", root_fd, path + root_len) >= (int) sizeof(actual) ||
+            !root_fd_join(root_fd, path + root_len, actual, sizeof(actual)) ||
             stat(actual, &st) != 0 || !metadata_db_storage_current() ||
             atomic_load_explicit(&scan_cancel_requested, memory_order_acquire) ||
             !metadata_db_get(path, (int64_t) st.st_mtime, (int64_t) st.st_size, &cached)) {
@@ -453,8 +462,9 @@ static bool library_scan_target_actual_path(const char * path, int root_fd,
         if (!slash) break;
         component = slash + 1;
     }
-    int n = snprintf(actual_path, actual_path_size, "/proc/self/fd/%d/%s", root_fd, relative);
-    return n > 0 && (size_t) n < actual_path_size;
+    char sub[PATH_MAX];
+    int n = snprintf(sub, sizeof(sub), "/%s", relative);
+    return n > 0 && (size_t) n < sizeof(sub) && root_fd_join(root_fd, sub, actual_path, actual_path_size);
 }
 
 static void scan_result_reset(void) {
@@ -700,8 +710,7 @@ static bool scan_spool_songs(FILE * spool, int root_fd, int count, bool force, b
         size_t root_len = strlen(MUSIC_ROOT_DIR);
         if (strncmp(path, MUSIC_ROOT_DIR, root_len) != 0 ||
             (path[root_len] != '/' && path[root_len] != '\0') ||
-            snprintf(actual_path, sizeof(actual_path), "/proc/self/fd/%d%s", root_fd,
-                     path + root_len) >= (int) sizeof(actual_path)) {
+            !root_fd_join(root_fd, path + root_len, actual_path, sizeof(actual_path))) {
             complete = false;
             break;
         }
