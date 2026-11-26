@@ -13,6 +13,7 @@
 #include "../../core/persistence/storage_paths.h"
 #include <stdio.h>
 #include <stdint.h>
+#include <unistd.h>
 
 static lv_obj_t * accent_color_screen;
 
@@ -63,7 +64,11 @@ static void accent_startup_tint_event_cb(lv_event_t * e) {
  * is present (see startup_splash.h). This copies a ready-made, screen-sized
  * RGB565 LVGL image from the SD card there, or removes it to restore the
  * default splash. Nothing outside the player's own data folder is touched. */
-#define STARTUP_IMAGE_SD_PATH SD_COMPAS_ROOT "/startup.bin"
+/* .compas is hidden in Finder and Explorer, so the card root is accepted too. */
+static const char * const startup_image_sd_paths[] = {
+    SD_COMPAS_ROOT "/startup.bin",
+    SD_ROOT_DIR "/startup.bin",
+};
 
 static lv_obj_t * startup_image_restore_card;
 
@@ -75,9 +80,20 @@ static void startup_image_sync(void) {
 
 static void startup_image_load_event_cb(lv_event_t * e) {
     if (lv_event_get_code(e) != LV_EVENT_CLICKED) return;
+    const char * source = NULL;
+    for (size_t i = 0; i < sizeof(startup_image_sd_paths) / sizeof(startup_image_sd_paths[0]); i++) {
+        if (access(startup_image_sd_paths[i], F_OK) == 0) {
+            source = startup_image_sd_paths[i];
+            break;
+        }
+    }
+    if (!source) {
+        show_error_toast(TR("No startup.bin on the SD card. Put it in the card's top folder."));
+        return;
+    }
     const char * reason = NULL;
-    if (startup_splash_install(STARTUP_IMAGE_SD_PATH, BOARD_SCREEN_WIDTH, BOARD_SCREEN_HEIGHT, &reason))
-        show_info_toast(TR("Startup image saved"));
+    if (startup_splash_install(source, BOARD_SCREEN_WIDTH, BOARD_SCREEN_HEIGHT, &reason))
+        show_info_toast(TR("Startup image saved. It shows from the next restart."));
     else
         show_error_toast(TR(reason ? reason : "Unable to save startup image"));
     startup_image_sync();
@@ -99,6 +115,7 @@ static lv_obj_t * add_startup_image_card(lv_obj_t * body, int32_t card_w, const 
     lv_obj_set_flex_flow(card, LV_FLEX_FLOW_COLUMN);
     lv_obj_set_style_pad_row(card, BOARD_SCALE_PX(4), 0);
     lv_obj_add_flag(card, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_set_style_opa(card, LV_OPA_60, LV_STATE_PRESSED); /* show the tap landed */
     lv_obj_add_event_cb(card, cb, LV_EVENT_CLICKED, NULL);
     gui_card_text(card, title, GUI_FONT_ROLE_ROW, false);
     lv_obj_t * hint_label = gui_card_text(card, hint, GUI_FONT_ROLE_SUBTEXT, true);
@@ -156,7 +173,7 @@ static void add_accent_options(lv_obj_t * body, int32_t card_w) {
         lv_obj_add_state(startup_tint_switch, LV_STATE_CHECKED);
 
     add_startup_image_card(body, card_w, TR("Load startup image from SD card"),
-        TR("Copies .compas/startup.bin from the SD card. It must be a screen-sized RGB565 LVGL image."),
+        TR("Copies startup.bin from the top folder of the SD card (or its .compas folder)."),
         startup_image_load_event_cb);
     startup_image_restore_card = add_startup_image_card(body, card_w, TR("Restore default startup image"),
         TR("Removes the custom startup image."), startup_image_restore_event_cb);
