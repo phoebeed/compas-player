@@ -87,6 +87,23 @@ override TARGET_CPU_FLAGS += $(TARGET_PATH_FLAGS)
 LVGL_DIR = lvgl
 DR_LIBS_DIR = dr_libs
 TINYALSA_DIR = tinyalsa
+# Dependencies without a release tag that fits are pinned to a commit, so a
+# rebuild of the same compás commit gets the same decoders and libraries.
+# Bump a pin on purpose, and rebuild and listen, when an upstream fix is
+# wanted. The tracked patches (tinyalsa, dr_libs) are made against these.
+DR_LIBS_COMMIT = e381981afa52800b9a3864df548353ff67252fbc
+TINYALSA_COMMIT = a7cd26a17fe2add2ff38d2f281ed0b919187a068
+FAAD2_COMMIT = a335040022e14ff9b6c54bbd459590d4c7edffe8
+ALAC_COMMIT = 5d8c5db0dfcadd5872f28e665cf4f4303447352a
+CJSON_COMMIT = 6d9f2443ab071f86e5d9b43025a40929ec41c46c
+LIBEXECINFO_COMMIT = 2bd72f355c847ac42064bf4118ee4e7b1f76c551
+# $(call clone_pinned,URL,DIR,COMMIT): a shallow fetch of exactly COMMIT.
+# Fetched into DIR.tmp and renamed only on success, so a failed fetch leaves
+# no half-made DIR that the $(wildcard) guards would take for a good one.
+clone_pinned = rm -rf $(2).tmp && git init -q $(2).tmp && \
+	git -C $(2).tmp fetch -q --depth 1 $(1) $(3) && \
+	git -C $(2).tmp -c advice.detachedHead=false checkout -q FETCH_HEAD && \
+	mv $(2).tmp $(2)
 TINYALSA_NATIVE_DSD_PATCH = patches/audio/tinyalsa/tinyalsa_native_dsd.patch
 TINYALSA_NATIVE_DSD_STAMP = $(TINYALSA_DIR)/.compas_native_dsd
 $(TINYALSA_NATIVE_DSD_STAMP): $(TINYALSA_NATIVE_DSD_PATCH) $(TINYALSA_DIR)/include/tinyalsa/pcm.h $(TINYALSA_DIR)/src/pcm.c scripts/tools/patches/apply-tracked-patch.sh
@@ -341,7 +358,7 @@ LVGL_FBDEV_SYMBOLS := lv_linux_fbdev_get_active_page lv_linux_fbdev_get_inactive
 # dr_flac (single-header FLAC decoder, used on both host and target)
 ifeq ($(wildcard $(DR_LIBS_DIR)),)
 $(info Cloning dr_libs (dr_flac)...)
-$(shell git clone --depth 1 https://github.com/mackron/dr_libs.git)
+$(shell $(call clone_pinned,https://github.com/mackron/dr_libs.git,$(DR_LIBS_DIR),$(DR_LIBS_COMMIT)))
 # dr_libs is a fresh upstream clone (gitignored, not tracked), so vendored
 # fixes to it must be reapplied here rather than committed. This patch bounds
 # dr_wav's metadata chunk seek so a crafted WAV/AIFC chunk size cannot spin
@@ -358,21 +375,21 @@ endif
 # tinyalsa (minimal ALSA userspace library, used on target only for audio output)
 ifeq ($(wildcard $(TINYALSA_DIR)),)
 $(info Cloning tinyalsa...)
-$(shell git clone --depth 1 https://github.com/tinyalsa/tinyalsa.git)
+$(shell $(call clone_pinned,https://github.com/tinyalsa/tinyalsa.git,$(TINYALSA_DIR),$(TINYALSA_COMMIT)))
 endif
 
 # FAAD2 (AAC decoder, GPLv2 -- see LICENSE and README before assuming this
 # is fine for a derived project of yours)
 ifeq ($(wildcard $(FAAD2_DIR)),)
 $(info Cloning FAAD2...)
-$(shell git clone --depth 1 https://github.com/knik0/faad2.git)
+$(shell $(call clone_pinned,https://github.com/knik0/faad2.git,$(FAAD2_DIR),$(FAAD2_COMMIT)))
 endif
 
 # ALAC (Apple Lossless decoder, Apache 2.0 -- Apple's own reference decoder,
 # mirrored by mikebrady)
 ifeq ($(wildcard $(ALAC_DIR)),)
 $(info Cloning ALAC...)
-$(shell git clone --depth 1 https://github.com/mikebrady/alac.git)
+$(shell $(call clone_pinned,https://github.com/mikebrady/alac.git,$(ALAC_DIR),$(ALAC_COMMIT)))
 endif
 
 # Xiph's Opus stack: libopus handles the codec, libogg the container, and
@@ -416,7 +433,7 @@ endif
 # APIs speak JSON, so this avoids needing an XML parser at all.
 ifeq ($(wildcard $(CJSON_DIR)),)
 $(info Cloning cJSON...)
-$(shell git clone --depth 1 https://github.com/DaveGamble/cJSON.git)
+$(shell $(call clone_pinned,https://github.com/DaveGamble/cJSON.git,$(CJSON_DIR),$(CJSON_COMMIT)))
 endif
 
 # libdbus (AFL-2.1/GPL-2+ dual-licensed) -- target only, for the AVRCP
@@ -460,7 +477,7 @@ endif
 # backtrace_symbols_fd() unconditionally on both builds.
 ifeq ($(wildcard $(LIBEXECINFO_DIR)),)
 $(info Cloning libexecinfo...)
-$(shell git clone --depth 1 https://github.com/fam007e/libexecinfo.git $(LIBEXECINFO_DIR))
+$(shell $(call clone_pinned,https://github.com/fam007e/libexecinfo.git,$(LIBEXECINFO_DIR),$(LIBEXECINFO_COMMIT)))
 endif
 # getreturnaddr()/getframeaddr() (used by execinfo.c's backtrace()) aren't
 # committed as a .c file upstream -- their own Makefile generates

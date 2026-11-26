@@ -1885,7 +1885,7 @@ const char * gui_player_get_now_playing_title(void) {
     return player_track_title_text ? player_track_title_text : "";
 }
 
-const char * gui_player_get_now_playing_folder(void) {
+const char * gui_player_get_now_playing_artist(void) {
     return player_track_artist_text ? player_track_artist_text : "";
 }
 

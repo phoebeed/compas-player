@@ -46,6 +46,9 @@ static atomic_uint diag_slowest_track_us, diag_slowest_session_us;
 static atomic_bool diag_have_write_end;
 /* The next write's underrun delta is not counted (skip, seek). */
 static atomic_bool diag_absorb_xruns;
+/* When the last skip or seek cut the stream (see scan_aplay_stderr()). */
+static atomic_uint diag_discontinuity_us;
+static atomic_bool diag_have_discontinuity;
 static atomic_uint diag_write_end_us;
 static struct pcm * diag_pcm;
 static unsigned int diag_pcm_xruns_seen;
@@ -126,6 +129,8 @@ void audio_output_diag_log_pending(void) {
 void audio_output_diag_discontinuity(void) {
     atomic_store_explicit(&diag_have_write_end, false, memory_order_relaxed);
     atomic_store_explicit(&diag_absorb_xruns, true, memory_order_relaxed);
+    atomic_store_explicit(&diag_discontinuity_us, monotonic_us32(), memory_order_relaxed);
+    atomic_store_explicit(&diag_have_discontinuity, true, memory_order_relaxed);
 }
 
 /* The one ALSA write: pcm_writei plus two clock reads and the atomic stores
@@ -154,6 +159,47 @@ static int diag_pcm_writei(struct pcm * pcm, const void * buf, unsigned int fram
     }
     atomic_store_explicit(&diag_absorb_xruns, false, memory_order_relaxed);
     return ret;
+}
+
+/* aplay (Bluetooth, USB) runs its own ALSA stream, so its underruns never
+ * show in pcm_get_xruns(). It prints "underrun!!!" on stderr for each one;
+ * count those. A skip or seek leaves aplay without data on purpose, and its
+ * warning can arrive a while later, so warnings within a second of a
+ * discontinuity are not counted. Audio thread only. */
+#define APLAY_XRUN_ABSORB_US 1000000u
+static char aplay_err_carry[8];
+static size_t aplay_err_carry_len;
+
+static void scan_aplay_stderr(int fd) {
+    if (fd < 0) return;
+    static const char needle[] = "underrun";
+    const size_t needle_len = sizeof(needle) - 1;
+    char buf[sizeof(aplay_err_carry) + 256];
+    for (;;) {
+        memcpy(buf, aplay_err_carry, aplay_err_carry_len);
+        ssize_t n = read(fd, buf + aplay_err_carry_len, sizeof(buf) - aplay_err_carry_len);
+        if (n <= 0) return; /* EAGAIN: nothing new; 0: aplay is gone */
+        size_t len = aplay_err_carry_len + (size_t) n;
+        unsigned int found = 0;
+        for (size_t i = 0; i + needle_len <= len; i++)
+            if (memcmp(buf + i, needle, needle_len) == 0) { found++; i += needle_len - 1; }
+        /* Keep a tail shorter than the word, so a split word is matched once. */
+        aplay_err_carry_len = len < needle_len - 1 ? len : needle_len - 1;
+        memcpy(aplay_err_carry, buf + len - aplay_err_carry_len, aplay_err_carry_len);
+        if (!found) continue;
+        bool absorbed = atomic_load_explicit(&diag_have_discontinuity, memory_order_relaxed) &&
+            monotonic_us32() - atomic_load_explicit(&diag_discontinuity_us, memory_order_relaxed) <
+                APLAY_XRUN_ABSORB_US;
+        if (absorbed) continue;
+        diag_add(&diag_xruns_track, found);
+        diag_add(&diag_xruns_session, found);
+    }
+}
+
+static void close_aplay_err(int * fd) {
+    if (*fd >= 0) close(*fd);
+    *fd = -1;
+    aplay_err_carry_len = 0;
 }
 
 static bool caller_owns_output(void) {
@@ -199,8 +245,10 @@ static output_target_t requested_target = OUTPUT_TARGET_LOCAL;
 static output_target_t active_target = OUTPUT_TARGET_LOCAL;
 static pid_t bt_aplay_pid = -1;
 static int bt_aplay_fd = -1;
+static int bt_aplay_err_fd = -1;  /* aplay's stderr, read for underrun warnings */
 static pid_t usb_aplay_pid = -1;
 static int usb_aplay_fd = -1;
+static int usb_aplay_err_fd = -1;
 static char usb_alsa_device[32] = "";
 static char active_usb_device[32] = "";
 static usb_dsd_output_t *usb_dsd = NULL;
@@ -264,7 +312,8 @@ static unsigned int s24_unsupported_rate = 0;
  * all. Shared by Bluetooth and USB targets, with a Bluetooth-specific
  * period duration to keep resampling ratios simple. */
 static bool spawn_aplay(const char * device, unsigned int channels, unsigned int sample_rate,
-                         enum pcm_format format, bool bluetooth, pid_t * out_pid, int * out_fd) {
+                         enum pcm_format format, bool bluetooth, pid_t * out_pid, int * out_fd,
+                         int * out_err_fd) {
     char rate_str[16], channels_str[8];
     snprintf(rate_str, sizeof(rate_str), "%u", sample_rate);
     snprintf(channels_str, sizeof(channels_str), "%u", channels);
@@ -274,11 +323,13 @@ static bool spawn_aplay(const char * device, unsigned int channels, unsigned int
     /* 100 ms gives integral periods at 44.1/48 kHz and their multiples.
      * The default 125 ms rounds 44.1 kHz to 5512 frames; Speex derives its
      * ratio from those period sizes, inflating the full coefficient table. */
-    char * argv[] = { (char *) "aplay", (char *) "-q", (char *) "-D", (char *) device,
+    /* No -q: quiet mode also drops the "underrun!!!" warnings that
+     * scan_aplay_stderr() counts. The banner it prints instead is ignored. */
+    char * argv[] = { (char *) "aplay", (char *) "-D", (char *) device,
                        (char *) "-t", (char *) "raw", (char *) "-f", (char *) format_str,
                        (char *) "-r", rate_str, (char *) "-c", channels_str,
                        bluetooth ? (char *) "--period-time=100000" : NULL, NULL };
-    if (!subprocess_popen_stdin(argv, out_pid, out_fd)) {
+    if (!subprocess_popen_stdin_stderr(argv, out_pid, out_fd, out_err_fd)) {
         DBG_LOG("audio_output: failed to spawn aplay for '%s' output\n", device);
         return false;
     }
@@ -289,6 +340,7 @@ static bool spawn_aplay(const char * device, unsigned int channels, unsigned int
     if (flags < 0 || fcntl(*out_fd, F_SETFL, flags | O_NONBLOCK) < 0) {
         subprocess_terminate(*out_pid);
         close(*out_fd);
+        close_aplay_err(out_err_fd);
         *out_pid = -1;
         *out_fd = -1;
         DBG_LOG("audio_output: failed to set aplay pipe non-blocking for '%s' output\n", device);
@@ -438,8 +490,29 @@ static void close_bt_device(void) {
     if (bt_aplay_pid < 0) return;
     subprocess_terminate(bt_aplay_pid);
     close(bt_aplay_fd);
+    close_aplay_err(&bt_aplay_err_fd);
     bt_aplay_pid = -1;
     bt_aplay_fd = -1;
+}
+
+/* The aplay pipe's EOF makes aplay drain and exit by itself. Bounded, so a
+ * stalled BlueALSA cannot hold the audio thread; then it is stopped. */
+#define APLAY_DRAIN_MAX_MS 1500
+static void drain_aplay(pid_t * pid, int * fd, int * err_fd) {
+    if (*pid < 0) return;
+    if (*fd >= 0) close(*fd);
+    *fd = -1;
+    close_aplay_err(err_fd); /* the drain's own end of stream is not an underrun */
+    for (int waited_ms = 0; waited_ms < APLAY_DRAIN_MAX_MS; waited_ms += 10) {
+        if (waitpid(*pid, NULL, WNOHANG) == *pid) {
+            *pid = -1;
+            return;
+        }
+        usleep(10000);
+    }
+    DBG_LOG("audio_output: aplay did not finish draining in %d ms, stopping it\n", APLAY_DRAIN_MAX_MS);
+    subprocess_terminate(*pid);
+    *pid = -1;
 }
 
 static void close_usb_device(void) {
@@ -451,6 +524,7 @@ static void close_usb_device(void) {
     if (usb_aplay_pid < 0) return;
     subprocess_terminate(usb_aplay_pid);
     close(usb_aplay_fd);
+    close_aplay_err(&usb_aplay_err_fd);
     usb_aplay_pid = -1;
     usb_aplay_fd = -1;
 }
@@ -514,7 +588,7 @@ static bool open_device(unsigned int channels, unsigned int sample_rate, bool lo
             DBG_LOG("usb_dsd: USB PCM requested device=%s channels=%u rate=%u bits=%u\n",
                     usb_device, channels, sample_rate, want_s24 ? 24u : 16u);
             if (!spawn_aplay(usb_device, channels, sample_rate, format, false,
-                             &usb_aplay_pid, &usb_aplay_fd)) return false;
+                             &usb_aplay_pid, &usb_aplay_fd, &usb_aplay_err_fd)) return false;
         }
         pthread_mutex_lock(&state_mutex);
         usb_dsd = direct;
@@ -536,7 +610,8 @@ static bool open_device(unsigned int channels, unsigned int sample_rate, bool lo
         /* A stable wide pipe avoids reopening BlueALSA at mixed-depth track
          * boundaries; narrow writes are widened below before reaching it. */
         enum pcm_format format = PCM_FORMAT_S24_LE;
-        if (!spawn_aplay(bt_device, channels, sample_rate, format, true, &bt_aplay_pid, &bt_aplay_fd)) return false;
+        if (!spawn_aplay(bt_device, channels, sample_rate, format, true, &bt_aplay_pid, &bt_aplay_fd,
+                         &bt_aplay_err_fd)) return false;
         pthread_mutex_lock(&state_mutex);
         active_target = OUTPUT_TARGET_BT;
         active_format = format;
@@ -693,6 +768,33 @@ static void close_device_state(void) {
     pthread_mutex_unlock(&state_mutex);
 }
 
+void audio_output_drain(void) {
+    if (!caller_owns_output()) return;
+    pthread_mutex_lock(&state_mutex);
+    output_target_t target = active_target;
+    struct pcm * pcm = alsa_pcm;
+    bool direct_usb = usb_dsd != NULL;
+    pthread_mutex_unlock(&state_mutex);
+    if (target == OUTPUT_TARGET_BT) {
+        drain_aplay(&bt_aplay_pid, &bt_aplay_fd, &bt_aplay_err_fd);
+    } else if (target == OUTPUT_TARGET_USB) {
+        if (!direct_usb) drain_aplay(&usb_aplay_pid, &usb_aplay_fd, &usb_aplay_err_fd);
+    } else if (pcm) {
+        /* DRAIN also starts a stream that never reached its start threshold
+         * (a track shorter than the buffer). The kernel bounds the wait. */
+        if (pcm_drain(pcm) < 0)
+            DBG_LOG("audio_output: pcm_drain failed: %s\n", pcm_get_error(pcm));
+    }
+    /* The idle time after the drain is not a gap between writes. */
+    atomic_store_explicit(&diag_have_write_end, false, memory_order_relaxed);
+}
+
+static bool drain_before_reopen = false; /* audio thread only */
+
+void audio_output_set_drain_on_reopen(bool on) {
+    drain_before_reopen = on;
+}
+
 void audio_output_close(void) {
     if (!caller_owns_output()) return;
     close_device_state();
@@ -750,6 +852,7 @@ static bool ensure_output(unsigned int channels, unsigned int sample_rate, bool 
             bt_aplay_pid = -1; /* already reaped above -- close_bt_device() below must not wait on it again */
             close(bt_aplay_fd);
             bt_aplay_fd = -1;
+            close_aplay_err(&bt_aplay_err_fd);
         }
     }
     if (active_target == OUTPUT_TARGET_USB && usb_aplay_pid >= 0) {
@@ -759,6 +862,7 @@ static bool ensure_output(unsigned int channels, unsigned int sample_rate, bool 
             usb_aplay_pid = -1; /* already reaped above -- close_usb_device() below must not wait on it again */
             close(usb_aplay_fd);
             usb_aplay_fd = -1;
+            close_aplay_err(&usb_aplay_err_fd);
         }
     }
 
@@ -775,6 +879,9 @@ static bool ensure_output(unsigned int channels, unsigned int sample_rate, bool 
     if (device_open && target == OUTPUT_TARGET_LOCAL && active_low_latency != low_latency) device_open = false;
     if (device_open && active_dop != dop) device_open = false;
     if (device_open && device_channels == channels && device_sample_rate == sample_rate) return true;
+    /* Only a device that stays on the same route is drained: after a route
+     * change the old output is gone or no longer wanted. */
+    if (drain_before_reopen && device_open && active_target == target) audio_output_drain();
     close_device_state();
     bool opened = open_device(channels, sample_rate, low_latency, want_s24, dop, target, usb_device, usb_mode);
     if (!opened) {
@@ -864,10 +971,12 @@ static bool write_pipe_bounded(int fd, const char * p, size_t remaining, size_t 
                 *out_written_bytes = total_bytes - remaining;
                 return false;
             }
-            if (pfd.revents & POLLOUT) {
-                continue;
-            }
+            /* POLLOUT, or nothing reported: try the write again. */
+            continue;
         }
+        /* write() returned 0, or failed with errno already set. Never leave
+         * a stale EAGAIN for the caller to log. */
+        if (n == 0) errno = EIO;
         *out_written_bytes = total_bytes - remaining;
         return false;
     }
@@ -937,6 +1046,7 @@ bool audio_output_write(const int16_t * buf, uint64_t frames, unsigned int chann
             }
             return false;
         }
+        scan_aplay_stderr(active_target == OUTPUT_TARGET_BT ? bt_aplay_err_fd : usb_aplay_err_fd);
         if (out_frames_written) *out_frames_written = frames;
         return true;
     }
@@ -1015,6 +1125,7 @@ bool audio_output_write_s24(const int32_t * buf, uint64_t frames, unsigned int c
             }
             return false;
         }
+        scan_aplay_stderr(target == OUTPUT_TARGET_BT ? bt_aplay_err_fd : usb_aplay_err_fd);
         if (out_frames_written) *out_frames_written = frames;
         return true;
     }

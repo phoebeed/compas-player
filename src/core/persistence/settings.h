@@ -249,8 +249,17 @@ typedef struct {
      * "Available Devices" list (shown as raw MAC addresses otherwise).
      * Paired devices are always shown regardless of this setting. */
     bool bt_hide_unnamed_devices;
+    /* When false, no cover art URL goes to BlueZ, so AVRCP replies carry no
+     * image handle. Some head units (a 2018 Fiat 500) stop reading the reply
+     * at that handle and lose the title that BlueZ sends after it. */
+    bool bt_send_cover_art;
     bool wifi_restore_at_startup;
     bool bt_restore_at_startup;
+    /* When true, playback that paused because the Bluetooth output dropped
+     * resumes once an A2DP output reconnects (a car turned back on). Off by
+     * default: a headset that reconnects on its own would otherwise start
+     * playing unasked. */
+    bool bt_resume_on_reconnect;
     bool wifi_last_on;
     bool bt_last_on;
 

@@ -1486,7 +1486,12 @@ static void chunk_snapshot_next_locked(playback_session_t * s, chunk_cmd_t * c) 
                     speed_for_path_locked(next_path) == 1.0;
     c->vol = volume_gain;
     c->remain_paused = paused;
-    c->chunk_frames = low_power_mode ? LOW_POWER_CHUNK_FRAMES : NORMAL_CHUNK_FRAMES;
+    /* Screen-off chunks are twice as long to save wakeups, but over Bluetooth
+     * one fills the whole aplay pipe (8192 frames x 8 bytes = 64 KiB) and the
+     * radio costs far more power than the wakeups anyway, so keep the normal
+     * size there. config_mutex (audio_output.c) never waits on audio_mutex. */
+    c->chunk_frames = (low_power_mode && !audio_output_is_bluetooth_requested())
+                          ? LOW_POWER_CHUNK_FRAMES : NORMAL_CHUNK_FRAMES;
 
     /* Phase 3: Stack-buffered owned snapshot of next track metadata.
      * Completely eliminates steady-state heap allocations during playback. */
@@ -1954,7 +1959,11 @@ static pb_step_t track_end_or_handoff(playback_session_t * s, const chunk_cmd_t 
         /* DoP to DoP at one rate keeps the stream open. */
         if (decoder_is_dop(&s->cur_dec) && decoder_is_dop(&s->nxt_dec))
             dsd_continue_dop_markers(s->nxt_dec.as.dsd, s->cur_dec.as.dsd);
+        /* A format change reopens the device; play out the end of the
+         * current track first instead of dropping its last buffer. */
+        audio_output_set_drain_on_reopen(true);
         bool device_ok = ensure_device_for_decoder(&s->nxt_dec, &s->nxt_frames_consumed);
+        audio_output_set_drain_on_reopen(false);
 #else
         bool device_ok = ensure_device(s->nxt_dec.channels, s->nxt_dec.sample_rate);
 #endif
