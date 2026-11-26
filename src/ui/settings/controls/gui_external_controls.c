@@ -45,7 +45,7 @@ static void poll_bluetooth_controls(void) {
     if (!has_track) bt_cover_art_begin_track(NULL);
     else if (current_settings.bt_send_cover_art) bt_cover_art_get_url(bt_art_url, sizeof(bt_art_url));
     bt_media_player_notify_track(has_track ? gui_player_get_now_playing_title() : "",
-                                 has_track ? gui_player_get_now_playing_folder() : "",
+                                 has_track ? gui_player_get_now_playing_artist() : "",
                                  has_track ? gui_player_get_now_playing_album() : "",
                                  has_track ? gui_player_get_now_playing_genre() : "",
                                  has_track ? gui_player_get_now_playing_track_number() : 0,
@@ -223,7 +223,7 @@ void gui_external_controls_publish_status(int stars) {
             ? gui_player_get_current_track_path()
             : NULL;
     remote_control_notify_status(audio_is_playing(), audio_is_paused(), gui_player_get_now_playing_title(),
-                                  gui_player_get_now_playing_folder(), gui_player_get_now_playing_album(), now_playing_path,
+                                  gui_player_get_now_playing_artist(), gui_player_get_now_playing_album(), now_playing_path,
                                   (int) audio_get_position_seconds(), (int) audio_get_duration_seconds(),
                                   audio_get_volume(), current_settings.play_mode,
                                   now_playing_path ? stars : 0, gui_theme_accent_rgb(),

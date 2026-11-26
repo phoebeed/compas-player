@@ -971,10 +971,12 @@ static bool write_pipe_bounded(int fd, const char * p, size_t remaining, size_t 
                 *out_written_bytes = total_bytes - remaining;
                 return false;
             }
-            if (pfd.revents & POLLOUT) {
-                continue;
-            }
+            /* POLLOUT, or nothing reported: try the write again. */
+            continue;
         }
+        /* write() returned 0, or failed with errno already set. Never leave
+         * a stale EAGAIN for the caller to log. */
+        if (n == 0) errno = EIO;
         *out_written_bytes = total_bytes - remaining;
         return false;
     }

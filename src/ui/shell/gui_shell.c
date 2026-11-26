@@ -165,7 +165,7 @@ void gui_shell_build_screens(uint32_t screen_width, uint32_t screen_height) {
     build_quick_drawer();
     if (gui_player_has_active_track()) {
         gui_shell_update_quick_drawer_track(gui_player_get_now_playing_title(),
-                                            gui_player_get_now_playing_folder(),
+                                            gui_player_get_now_playing_artist(),
                                             gui_player_get_now_playing_album());
     }
     refresh_format_badge();

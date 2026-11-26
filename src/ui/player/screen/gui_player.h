@@ -232,7 +232,7 @@ void gui_player_remember_volume_percent(int32_t percent);
 void gui_player_set_car_mode_enabled(bool enabled);
 bool gui_player_volume_is_being_adjusted(void);
 const char * gui_player_get_now_playing_title(void);
-const char * gui_player_get_now_playing_folder(void);
+const char * gui_player_get_now_playing_artist(void);
 const char * gui_player_get_now_playing_album(void);
 const char * gui_player_get_now_playing_genre(void);
 int gui_player_get_now_playing_track_number(void);
