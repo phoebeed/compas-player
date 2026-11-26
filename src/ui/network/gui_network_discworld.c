@@ -13,6 +13,7 @@
 #include "../../network/wifi/wifi_control.h"
 #include "gui_network_discworld.h"
 #include "gui_network_internal.h"
+#include <arpa/inet.h>
 #include <pthread.h>
 #include <stdatomic.h>
 #include <stdio.h>
@@ -59,7 +60,7 @@ static atomic_bool dw_unplugged;  /* the charger was pulled with "only while cha
 static lv_obj_t * dw_screen;
 static lv_obj_t * dw_list;
 static lv_obj_t * dw_status_label;
-static char dw_last_summary[640];  /* what the last sync did, shown under the rows */
+static char dw_last_summary[1280];  /* what the last sync did, shown under the rows */
 static uint32_t dw_last_auto_check;
 static time_t dw_auto_retry_after;
 
@@ -241,7 +242,7 @@ static void dw_status_text(char * out, size_t size) {
 
 static void dw_refresh_status(void) {
     if (!dw_status_label) return;
-    char text[640];
+    char text[1280];
     dw_status_text(text, sizeof(text));
     if (strcmp(lv_label_get_text(dw_status_label), text) != 0) lv_label_set_text(dw_status_label, text);
 }
@@ -397,6 +398,30 @@ static void dw_profile_done(const char * text, void * user) {
     dw_populate();
 }
 
+static void dw_ip_done(const char * text, void * user) {
+    (void) user;
+    char ip[sizeof(current_settings.discworld_ip)] = "";
+    if (text) {
+        while (*text == ' ') text++;
+        snprintf(ip, sizeof(ip), "%s", text);
+        size_t n = strlen(ip);
+        while (n && ip[n - 1] == ' ') ip[--n] = '\0';
+    }
+    struct in_addr a;
+    if (ip[0] && inet_pton(AF_INET, ip, &a) != 1) {
+        show_info_toast(TR("Not an IP address, like 192.168.0.42"));
+        return;
+    }
+    snprintf(current_settings.discworld_ip, sizeof(current_settings.discworld_ip), "%s", ip);
+    settings_save_async(&current_settings);
+    dw_populate();
+}
+
+static void dw_ip_row_cb(lv_event_t * e) {
+    if (lv_event_get_code(e) != LV_EVENT_CLICKED) return;
+    show_text_entry(TR("Server IP (empty: find it)"), current_settings.discworld_ip, false, false, dw_ip_done, NULL);
+}
+
 static void dw_url_row_cb(lv_event_t * e) {
     if (lv_event_get_code(e) != LV_EVENT_CLICKED) return;
     show_text_entry(TR("Discworld address"), current_settings.discworld_url, false, false, dw_url_done, NULL);
@@ -495,13 +520,12 @@ static void dw_populate(void) {
            "on that network every few hours, copying only new and changed songs."));
 
     add_section_header(dw_list, TR("Server"));
-    if (current_settings.discworld_url[0] && current_settings.discworld_ip[0])
-        snprintf(label, sizeof(label), TR("Address: %s (at %s)"), current_settings.discworld_url,
-                 current_settings.discworld_ip);
-    else
-        snprintf(label, sizeof(label), TR("Address: %s"),
-                 current_settings.discworld_url[0] ? current_settings.discworld_url : TR("not set"));
+    snprintf(label, sizeof(label), TR("Address: %s"),
+             current_settings.discworld_url[0] ? current_settings.discworld_url : TR("not set"));
     add_pill_chevron_row(dw_list, label, dw_url_row_cb);
+    snprintf(label, sizeof(label), TR("Server IP: %s"),
+             current_settings.discworld_ip[0] ? current_settings.discworld_ip : TR("automatic"));
+    add_pill_chevron_row(dw_list, label, dw_ip_row_cb);
     add_pill_chevron_row(dw_list, current_settings.discworld_password[0] ? TR("Password: set") : TR("Password: none"),
                          dw_password_row_cb);
     snprintf(label, sizeof(label), TR("People: %s"),

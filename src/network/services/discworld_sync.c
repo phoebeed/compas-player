@@ -1,3 +1,4 @@
+#include <stdarg.h>
 #include "discworld_sync.h"
 #include "../download/download.h"
 #include "cJSON.h"
@@ -44,6 +45,7 @@ static const char * dw_why(const char * error) {
     if (!strcmp(error, HTTP_ERR_TLS)) return "the https connection failed";
     if (!strcmp(error, HTTP_ERR_TIMEOUT)) return "it stopped answering";
     if (!strcmp(error, HTTP_ERR_INVALID_URL)) return "not a web address";
+    if (strstr(error, "too_large")) return "answered, but it is not Discworld";
     return error;
 }
 
@@ -1198,8 +1200,8 @@ static discworld_status_t dw_run(dw_ctx_t * x, dw_state_t * st) {
  * Discworld's. */
 
 #define DW_SERVICE "Discworld._http._tcp.local"
-#define DW_PROBE_CONNECT_MS 3000U
-#define DW_PROBE_TOTAL_MS 6000U
+#define DW_PROBE_CONNECT_MS 5000U
+#define DW_PROBE_TOTAL_MS 12000U
 
 static bool dw_probe(dw_ctx_t * x, const char * base, char * why, size_t why_size) {
     memset(x->req, 0, sizeof(*x->req));
@@ -1229,7 +1231,7 @@ static bool dw_probe(dw_ctx_t * x, const char * base, char * why, size_t why_siz
  * looks for anything on the home network that takes a connection on 443,
  * 8080 or 80, many at once with a short wait, and writes each as a URL. */
 #define DW_SCAN_BATCH 96
-#define DW_SCAN_WAIT_MS 700
+#define DW_SCAN_WAIT_MS 1500
 #define DW_SCAN_MAX_HOSTS 1024
 #define DW_SCAN_MAX_FOUND 12
 
@@ -1278,7 +1280,7 @@ static int dw_scan_batch(const uint32_t * ips, const uint16_t * ports, int n, dw
     return nhits;
 }
 
-static int dw_scan_network(dw_ctx_t * x, char urls[][64], int max) {
+static int dw_scan_network(dw_ctx_t * x, char urls[][64], int max, char * self_out, size_t self_size) {
     struct ifaddrs * list = NULL;
     if (getifaddrs(&list) != 0) return 0;
     uint32_t self = 0, mask = 0;
@@ -1298,6 +1300,8 @@ static int dw_scan_network(dw_ctx_t * x, char urls[][64], int max) {
     }
     freeifaddrs(list);
     if (!self) return 0;
+    struct in_addr me = { .s_addr = htonl(self) };
+    if (self_out) inet_ntop(AF_INET, &me, self_out, (socklen_t) self_size);
     if (~mask + 1U > DW_SCAN_MAX_HOSTS || mask == 0) mask = 0xFFFFFF00U; /* a big network: its /24 */
     uint32_t net = self & mask, count = ~mask + 1U;
     static const uint16_t scan_ports[] = { 443, 8080, 80 };
@@ -1336,6 +1340,18 @@ static int dw_scan_network(dw_ctx_t * x, char urls[][64], int max) {
     return out;
 }
 
+/* Appends one line to the failure detail, as much as fits. */
+static void dw_add(discworld_result_t * r, size_t * used, const char * fmt, ...) __attribute__((format(printf, 3, 4)));
+static void dw_add(discworld_result_t * r, size_t * used, const char * fmt, ...) {
+    if (*used >= sizeof(r->detail) - 1) return;
+    va_list ap;
+    va_start(ap, fmt);
+    int w = vsnprintf(r->detail + *used, sizeof(r->detail) - *used, fmt, ap);
+    va_end(ap);
+    if (w > 0) *used += (size_t) w;
+    if (*used >= sizeof(r->detail)) *used = sizeof(r->detail) - 1;
+}
+
 static bool dw_discover(dw_ctx_t * x, discworld_result_t * r) {
     char candidates[8][160];
     int n = 0;
@@ -1361,28 +1377,36 @@ static bool dw_discover(dw_ctx_t * x, discworld_result_t * r) {
             snprintf(candidates[n++], sizeof(candidates[0]), "%s", usual[i]);
     }
     size_t used = strlen(r->detail);
+    /* Tries that fail the same way share a line: "a, b, c: why". */
+    char last_why[120] = "";
     for (int i = 0; i < n && !dw_stopping(x); i++) {
         char why[120];
         if (dw_probe(x, candidates[i], why, sizeof(why))) {
             snprintf(r->found_url, sizeof(r->found_url), "%s", candidates[i]);
             return true;
         }
-        if (used < sizeof(r->detail) - 1) {
-            int w = snprintf(r->detail + used, sizeof(r->detail) - used, "\n%s: %s", candidates[i], why);
-            if (w > 0) used += (size_t) w;
-            if (used >= sizeof(r->detail)) used = sizeof(r->detail) - 1;
+        size_t tail = strlen(last_why) + 2;
+        if (last_why[0] && !strcmp(why, last_why) && used >= tail) {
+            used -= tail; /* take ": why" off, add this one, put it back */
+            r->detail[used] = '\0';
+            dw_add(r, &used, ", %s: %s", candidates[i], why);
+        } else {
+            dw_add(r, &used, "\n%s: %s", candidates[i], why);
         }
+        snprintf(last_why, sizeof(last_why), "%s", why);
     }
     /* Then anything on the home network that answers like Discworld. */
     char found[DW_SCAN_MAX_FOUND][64];
-    int nf = dw_stopping(x) ? 0 : dw_scan_network(x, found, DW_SCAN_MAX_FOUND);
+    char self_ip[INET_ADDRSTRLEN] = "";
+    int nf = dw_stopping(x) ? 0 : dw_scan_network(x, found, DW_SCAN_MAX_FOUND, self_ip, sizeof(self_ip));
+    if (self_ip[0]) dw_add(r, &used, "\nThis player is at %s", self_ip);
     /* An https server behind a proxy (Caddy) answers only under its name, so
      * each https address is also tried as the usual names, pinned to it. */
     const char * names[3] = { NULL, "discworld.local", "jarvis.local" };
     if (set_host[0] && !dw_is_ip(set_host) && strcasecmp(set_host, "discworld.local") && strcasecmp(set_host, "jarvis.local"))
         names[0] = set_host;
     for (int i = 0; i < nf && !dw_stopping(x); i++) {
-        char why[120];
+        char why[120] = "";
         if (strncmp(found[i], "https://", 8) == 0) {
             const char * ip = found[i] + 8;
             for (int k = 0; k < 3 && !dw_stopping(x); k++) {
@@ -1396,17 +1420,16 @@ static bool dw_discover(dw_ctx_t * x, discworld_result_t * r) {
                     return true;
                 }
                 http_pin_host(names[k], NULL);
+                if (k == 1) dw_add(r, &used, "\n%s as discworld.local: %s", ip, why);
             }
         }
         if (dw_probe(x, found[i], why, sizeof(why))) {
             snprintf(r->found_url, sizeof(r->found_url), "%s", found[i]);
             return true;
         }
+        dw_add(r, &used, "\n%s: %s", found[i], why);
     }
-    if (used < sizeof(r->detail) - 1)
-        snprintf(r->detail + used, sizeof(r->detail) - used,
-                 nf ? "\nSearched the home network: %d web servers, none of them Discworld"
-                    : "\nSearched the home network: no web servers answered", nf);
+    if (!nf) dw_add(r, &used, "\n%s", "Searched the home network: no web servers answered");
     return false;
 }
 
