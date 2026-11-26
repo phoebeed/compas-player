@@ -266,6 +266,12 @@ typedef struct {
     /* Category menus only: plugin icon path (absolute or relative to .plugins),
      * resolved with the same rules as register_list_item options.icon. */
     const char * plugin_icon;
+
+    /* Tile mode only: a built-in LVGL image used instead of icon_asset
+     * (Home's Favorites heart, which no stock theme provides), and whether
+     * the tile spans both grid columns (a last, odd tile). */
+    const void * icon_src;
+    bool span_row;
 } icon_grid_item_t;
 
 /* Home's tile grid: a screen with no header holding a 2-column grid of card

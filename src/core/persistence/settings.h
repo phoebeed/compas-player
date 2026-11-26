@@ -193,6 +193,23 @@ typedef struct {
     } subsonic_saved[SETTINGS_SUBSONIC_SAVED_MAX];
     int subsonic_saved_count;
 
+    /* Discworld (the home media server) Wi-Fi sync; see discworld_sync.h.
+     * The password is Discworld's APP_PASSWORD, kept in plaintext like the
+     * Subsonic one above. auto_ssid: sync by itself while joined to this
+     * network (empty: only when asked). charging_only: never sync on battery. */
+    char discworld_url[256];
+    char discworld_ip[48];    /* address the sync last reached discworld_url's name at, when names did not work */
+    char discworld_password[128];
+    /* The people whose favourite playlists the player keeps, comma
+     * separated ("Rachel, Phoebe, Amelie"): Home > Favourites shows one
+     * button each, reading Playlists/Favourites/<name>/, and the Discworld
+     * sync fills those folders with each one's playlists. Empty: one flat
+     * Favourites list. */
+    char favorites_people[160];
+    char discworld_auto_ssid[33];
+    bool discworld_charging_only;
+    int discworld_last_sync; /* time() of the last sync that finished, 0: never */
+
     /* Local Cirrus DAC controls. Filter enum 0..3; NOS disables the
      * interpolation filter. DRE defaults on to match the R3 Pro II codec. */
     int dac_filter;
