@@ -417,6 +417,27 @@ static void dw_sync_row_cb(lv_event_t * e) {
     dw_populate();
 }
 
+/* Music menu: starts a sync (unless one is running) and opens this screen,
+ * which shows how it is going. */
+void gui_network_discworld_sync_now_cb(lv_event_t * e) {
+    if (lv_event_get_code(e) != LV_EVENT_CLICKED) return;
+    if (!dw_thread_active) {
+        if (!wifi_feature_guard()) return;
+        if (current_settings.discworld_charging_only && !dw_on_power()) {
+            show_error_toast(TR("Connect power to sync (Only while charging is on)"));
+            return;
+        }
+        dw_last_summary[0] = '\0';
+        if (!dw_start(DW_JOB_SYNC)) {
+            show_error_toast(TR("Thread launch failed"));
+            return;
+        }
+    }
+    if (!dw_screen) return;
+    dw_populate();
+    nav_push(dw_screen);
+}
+
 static void dw_charging_toggle_cb(lv_event_t * e) {
     if (lv_event_get_code(e) != LV_EVENT_CLICKED) return;
     current_settings.discworld_charging_only = !current_settings.discworld_charging_only;
