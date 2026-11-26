@@ -1,6 +1,7 @@
 #include "discworld_sync.h"
 #include "../download/download.h"
 #include "cJSON.h"
+#include "../http/client/mdns_resolve.h"
 #include <ctype.h>
 #include <errno.h>
 #include <fcntl.h>
@@ -27,6 +28,18 @@
 #define DW_AUDIOBOOKS_FOLDER "Audiobooks"
 
 /* ---- small helpers ------------------------------------------------------------------------ */
+
+/* The HTTP client's error code in words for the status line. */
+static const char * dw_why(const char * error) {
+    if (!error || !error[0]) return "no answer";
+    if (!strcmp(error, HTTP_ERR_DNS)) return "nothing on the Wi-Fi has that name";
+    if (!strcmp(error, HTTP_ERR_CONNECT)) return "found, but nothing answers on that port";
+    if (!strcmp(error, HTTP_ERR_CONNECT_TIMEOUT)) return "no answer in time";
+    if (!strcmp(error, HTTP_ERR_TLS)) return "the https connection failed";
+    if (!strcmp(error, HTTP_ERR_TIMEOUT)) return "it stopped answering";
+    if (!strcmp(error, HTTP_ERR_INVALID_URL)) return "not a web address";
+    return error;
+}
 
 static void dw_detail(discworld_result_t * r, const char * fmt, const char * arg) {
     snprintf(r->detail, sizeof(r->detail), fmt, arg ? arg : "");
@@ -579,7 +592,7 @@ static discworld_status_t dw_login(dw_ctx_t * x) {
     bool ok = http_request_ex(x->req, x->cancel, x->resp);
     memset(body, 0, sizeof(body));
     if (!ok) {
-        dw_detail(x->result, "Could not reach Discworld (%s)", x->resp->error);
+        dw_detail(x->result, "%s", dw_why(x->resp->error));
         http_response_free(x->resp);
         return dw_stopping(x) ? DISCWORLD_STOPPED : DISCWORLD_ERR_CONNECT;
     }
@@ -607,7 +620,7 @@ static discworld_status_t dw_get(dw_ctx_t * x, const char * path, size_t max_byt
         dw_request_init(x, path);
         x->req->max_response_bytes = max_bytes;
         if (!http_request_ex(x->req, x->cancel, x->resp)) {
-            dw_detail(x->result, "Could not reach Discworld (%s)", x->resp->error);
+            dw_detail(x->result, "%s", dw_why(x->resp->error));
             http_response_free(x->resp);
             return dw_stopping(x) ? DISCWORLD_STOPPED : DISCWORLD_ERR_CONNECT;
         }
@@ -1146,6 +1159,76 @@ static discworld_status_t dw_run(dw_ctx_t * x, dw_state_t * st) {
     return outcome;
 }
 
+/* ---- finding Discworld ------------------------------------------------------
+ * When the set address does not answer: Discworld's lan-name.sh announces
+ * "Discworld" (_http._tcp) on the Wi-Fi with its host name and port, so ask
+ * for that first, then try the addresses its scripts give out. A candidate
+ * counts when its /healthz (open without the password) answers like
+ * Discworld's. */
+
+#define DW_SERVICE "Discworld._http._tcp.local"
+#define DW_PROBE_CONNECT_MS 3000U
+#define DW_PROBE_TOTAL_MS 6000U
+
+static bool dw_probe(dw_ctx_t * x, const char * base, char * why, size_t why_size) {
+    memset(x->req, 0, sizeof(*x->req));
+    snprintf(x->req->url, sizeof(x->req->url), "%s/healthz", base);
+    x->req->method = HTTP_METHOD_GET;
+    x->req->verify_tls = false;
+    x->req->connect_timeout_ms = DW_PROBE_CONNECT_MS;
+    x->req->read_timeout_ms = DW_PROBE_TOTAL_MS;
+    x->req->total_timeout_ms = DW_PROBE_TOTAL_MS;
+    x->req->redirect_limit = 0;
+    x->req->max_response_bytes = 256;
+    if (!http_request_ex(x->req, x->cancel, x->resp)) {
+        snprintf(why, why_size, "%s", dw_why(x->resp->error));
+        http_response_free(x->resp);
+        return false;
+    }
+    int status = x->resp->status;
+    bool ours = (status == 200 || status == 503) && x->resp->body && x->resp->body_len >= 2 &&
+                (strncmp((const char *) x->resp->body, "ok", 2) == 0 ||
+                 strncmp((const char *) x->resp->body, "the fetching", 12) == 0);
+    if (!ours) snprintf(why, why_size, "answered %d, not Discworld", status);
+    http_response_free(x->resp);
+    return ours;
+}
+
+static bool dw_discover(dw_ctx_t * x, discworld_result_t * r) {
+    char candidates[8][160];
+    int n = 0;
+    char target[120];
+    uint16_t port = 0;
+    if (mdns_resolve_srv(DW_SERVICE, 2000, target, sizeof(target), &port) && port) {
+        if (port == 80) snprintf(candidates[n++], sizeof(candidates[0]), "http://%s", target);
+        else snprintf(candidates[n++], sizeof(candidates[0]), "http://%s:%u", target, (unsigned) port);
+    }
+    static const char * const usual[] = {
+        "http://discworld.local:8080", "http://discworld.local", "https://discworld.local",
+        "http://jarvis.local:8080", "http://jarvis.local", "https://jarvis.local",
+    };
+    for (size_t i = 0; i < sizeof(usual) / sizeof(usual[0]) && n < 8; i++) {
+        bool dup = false;
+        for (int k = 0; k < n; k++) if (strcmp(candidates[k], usual[i]) == 0) dup = true;
+        if (!dup && strcmp(usual[i], x->config->base_url) != 0)
+            snprintf(candidates[n++], sizeof(candidates[0]), "%s", usual[i]);
+    }
+    size_t used = strlen(r->detail);
+    for (int i = 0; i < n && !dw_stopping(x); i++) {
+        char why[120];
+        if (dw_probe(x, candidates[i], why, sizeof(why))) {
+            snprintf(r->found_url, sizeof(r->found_url), "%s", candidates[i]);
+            return true;
+        }
+        if (used < sizeof(r->detail) - 1) {
+            int w = snprintf(r->detail + used, sizeof(r->detail) - used, "\n%s: %s", candidates[i], why);
+            if (w > 0) used += (size_t) w;
+            if (used >= sizeof(r->detail)) used = sizeof(r->detail) - 1;
+        }
+    }
+    return false;
+}
+
 void discworld_sync_run(const discworld_config_t * config, http_cancel_token_t * cancel,
                         discworld_keep_going_fn keep_going, discworld_progress_fn progress, void * user,
                         discworld_result_t * result) {
@@ -1173,6 +1256,25 @@ void discworld_sync_run(const discworld_config_t * config, http_cancel_token_t *
     dw_state_t st = { 0 };
     if (!x.req || !x.resp) r->status = DISCWORLD_ERR_MEMORY;
     else r->status = dw_run(&x, &st);
+    if (r->status == DISCWORLD_ERR_CONNECT && x.req && x.resp && !dw_stopping(&x)) {
+        /* The set address did not answer: look for Discworld, and sync with it there. */
+        char first[sizeof(r->detail)];
+        snprintf(first, sizeof(first), "%s: %s", config->base_url, r->detail);
+        snprintf(r->detail, sizeof(r->detail), "%s", first);
+        discworld_config_t found = *config;
+        if (dw_discover(&x, r)) {
+            snprintf(found.base_url, sizeof(found.base_url), "%s", r->found_url);
+            char keep[sizeof(r->found_url)];
+            snprintf(keep, sizeof(keep), "%s", r->found_url);
+            dw_state_free(&st);
+            memset(&st, 0, sizeof(st));
+            memset(r, 0, sizeof(*r));
+            snprintf(r->found_url, sizeof(r->found_url), "%s", keep);
+            x.config = &found;
+            x.cookie[0] = '\0';
+            r->status = dw_run(&x, &st);
+        }
+    }
     if (r->status == DISCWORLD_ERR_MEMORY && !r->detail[0]) dw_detail(r, "%s", "Out of memory");
     if (r->status == DISCWORLD_ERR_CARD && !r->detail[0]) dw_detail(r, "%s", "Could not write to the SD card");
     dw_state_free(&st);

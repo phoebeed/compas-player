@@ -59,7 +59,7 @@ static atomic_bool dw_unplugged;  /* the charger was pulled with "only while cha
 static lv_obj_t * dw_screen;
 static lv_obj_t * dw_list;
 static lv_obj_t * dw_status_label;
-static char dw_last_summary[200];  /* what the last sync did, shown under the rows */
+static char dw_last_summary[640];  /* what the last sync did, shown under the rows */
 static uint32_t dw_last_auto_check;
 static time_t dw_auto_retry_after;
 
@@ -240,7 +240,7 @@ static void dw_status_text(char * out, size_t size) {
 
 static void dw_refresh_status(void) {
     if (!dw_status_label) return;
-    char text[256];
+    char text[640];
     dw_status_text(text, sizeof(text));
     if (strcmp(lv_label_get_text(dw_status_label), text) != 0) lv_label_set_text(dw_status_label, text);
 }
@@ -256,6 +256,14 @@ static void dw_finish_sync(bool automatic) {
     time_t now = time(NULL);
     dw_format_when(now, when, sizeof(when));
 
+    if (r.found_url[0]) {
+        /* The set address did not answer; Discworld was found here, so keep it. */
+        snprintf(current_settings.discworld_url, sizeof(current_settings.discworld_url), "%s", r.found_url);
+        settings_save_async(&current_settings);
+        char toast[220];
+        snprintf(toast, sizeof(toast), TR("Found Discworld at %s"), r.found_url);
+        show_info_toast(toast);
+    }
     if (r.status == DISCWORLD_OK) {
         current_settings.discworld_last_sync = (int) now;
         settings_save_async(&current_settings);
@@ -271,7 +279,7 @@ static void dw_finish_sync(bool automatic) {
         if (r.status == DISCWORLD_STOPPED)
             why = atomic_load(&dw_unplugged) ? TR("Paused: unplugged from power") : TR("Stopped");
         else if (r.status == DISCWORLD_ERR_PASSWORD) why = TR("Discworld wants its password (set it above)");
-        else if (r.status == DISCWORLD_ERR_CONNECT) why = TR("Could not reach Discworld");
+        else if (r.status == DISCWORLD_ERR_CONNECT) why = TR("Could not find Discworld on this Wi-Fi. Tried:");
         else if (r.status == DISCWORLD_ERR_FULL) why = TR("The SD card is full");
         else if (r.status == DISCWORLD_ERR_CARD) why = TR("Could not write to the SD card");
         else why = TR("Sync failed");
