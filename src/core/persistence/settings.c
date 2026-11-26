@@ -115,14 +115,23 @@ static const pfield_t plain_fields[] = {
     PF("subsonic_username", PF_STR, subsonic_username),
     PF("subsonic_password", PF_STR, subsonic_password),
     PF("subsonic_verify_tls", PF_BOOL, subsonic_verify_tls),
+    PF("discworld_url", PF_STR, discworld_url),
+    PF("discworld_ip", PF_STR, discworld_ip),
+    PF("discworld_password", PF_STR, discworld_password),
+    PF("favorites_people", PF_STR, favorites_people),
+    PF("discworld_auto_ssid", PF_STR, discworld_auto_ssid),
+    PF("discworld_charging_only", PF_BOOL, discworld_charging_only),
+    PF("discworld_last_sync", PF_INT, discworld_last_sync),
     PF("bt_volume_sync", PF_BOOL, bt_volume_sync_enabled),
     PF("bt_dac_mode", PF_BOOL, bt_dac_mode_enabled),
     PF("dac_nos", PF_BOOL, dac_nos),
     PF("bt_speexrate", PF_BOOL, bt_speexrate_enabled),
     PF("bt_codec", PF_STR, bt_codec),
     PF("bt_hide_unnamed_devices", PF_BOOL, bt_hide_unnamed_devices),
+    PF("bt_send_cover_art", PF_BOOL, bt_send_cover_art),
     PF("wifi_restore_at_startup", PF_BOOL, wifi_restore_at_startup),
     PF("bt_restore_at_startup", PF_BOOL, bt_restore_at_startup),
+    PF("bt_resume_on_reconnect", PF_BOOL, bt_resume_on_reconnect),
     PF("wifi_last_on", PF_BOOL, wifi_last_on),
     PF("bt_last_on", PF_BOOL, bt_last_on),
     PF("wifi_dac_mode", PF_BOOL, wifi_dac_mode_enabled),
@@ -450,6 +459,12 @@ static void set_defaults(player_settings_t * out) {
     out->subsonic_download_layout = 0;
     memset(out->subsonic_saved, 0, sizeof(out->subsonic_saved));
     out->subsonic_saved_count = 0;
+    snprintf(out->discworld_url, sizeof(out->discworld_url), "https://discworld.local");
+    out->discworld_password[0] = '\0';
+    snprintf(out->favorites_people, sizeof(out->favorites_people), "Rachel, Phoebe, Amelie");
+    out->discworld_auto_ssid[0] = '\0';
+    out->discworld_charging_only = false;
+    out->discworld_last_sync = 0;
     out->bt_volume_sync_enabled = true;
     out->dac_filter = 0;
     out->dac_nos = false;
@@ -468,8 +483,10 @@ static void set_defaults(player_settings_t * out) {
     snprintf(out->bt_codec, sizeof(out->bt_codec), "auto");
     out->bt_last_output_mac[0] = '\0';
     out->bt_hide_unnamed_devices = true;
+    out->bt_send_cover_art = true;
     out->wifi_restore_at_startup = false;
     out->bt_restore_at_startup = false;
+    out->bt_resume_on_reconnect = false;
     out->wifi_last_on = false;
     out->bt_last_on = false;
     out->wifi_dac_mode_enabled = false;

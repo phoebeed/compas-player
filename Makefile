@@ -87,6 +87,23 @@ override TARGET_CPU_FLAGS += $(TARGET_PATH_FLAGS)
 LVGL_DIR = lvgl
 DR_LIBS_DIR = dr_libs
 TINYALSA_DIR = tinyalsa
+# Dependencies without a release tag that fits are pinned to a commit, so a
+# rebuild of the same compás commit gets the same decoders and libraries.
+# Bump a pin on purpose, and rebuild and listen, when an upstream fix is
+# wanted. The tracked patches (tinyalsa, dr_libs) are made against these.
+DR_LIBS_COMMIT = e381981afa52800b9a3864df548353ff67252fbc
+TINYALSA_COMMIT = a7cd26a17fe2add2ff38d2f281ed0b919187a068
+FAAD2_COMMIT = a335040022e14ff9b6c54bbd459590d4c7edffe8
+ALAC_COMMIT = 5d8c5db0dfcadd5872f28e665cf4f4303447352a
+CJSON_COMMIT = 6d9f2443ab071f86e5d9b43025a40929ec41c46c
+LIBEXECINFO_COMMIT = 2bd72f355c847ac42064bf4118ee4e7b1f76c551
+# $(call clone_pinned,URL,DIR,COMMIT): a shallow fetch of exactly COMMIT.
+# Fetched into DIR.tmp and renamed only on success, so a failed fetch leaves
+# no half-made DIR that the $(wildcard) guards would take for a good one.
+clone_pinned = rm -rf $(2).tmp && git init -q $(2).tmp && \
+	git -C $(2).tmp fetch -q --depth 1 $(1) $(3) && \
+	git -C $(2).tmp -c advice.detachedHead=false checkout -q FETCH_HEAD && \
+	mv $(2).tmp $(2)
 TINYALSA_NATIVE_DSD_PATCH = patches/audio/tinyalsa/tinyalsa_native_dsd.patch
 TINYALSA_NATIVE_DSD_STAMP = $(TINYALSA_DIR)/.compas_native_dsd
 $(TINYALSA_NATIVE_DSD_STAMP): $(TINYALSA_NATIVE_DSD_PATCH) $(TINYALSA_DIR)/include/tinyalsa/pcm.h $(TINYALSA_DIR)/src/pcm.c scripts/tools/patches/apply-tracked-patch.sh
@@ -341,7 +358,7 @@ LVGL_FBDEV_SYMBOLS := lv_linux_fbdev_get_active_page lv_linux_fbdev_get_inactive
 # dr_flac (single-header FLAC decoder, used on both host and target)
 ifeq ($(wildcard $(DR_LIBS_DIR)),)
 $(info Cloning dr_libs (dr_flac)...)
-$(shell git clone --depth 1 https://github.com/mackron/dr_libs.git)
+$(shell $(call clone_pinned,https://github.com/mackron/dr_libs.git,$(DR_LIBS_DIR),$(DR_LIBS_COMMIT)))
 # dr_libs is a fresh upstream clone (gitignored, not tracked), so vendored
 # fixes to it must be reapplied here rather than committed. This patch bounds
 # dr_wav's metadata chunk seek so a crafted WAV/AIFC chunk size cannot spin
@@ -358,21 +375,21 @@ endif
 # tinyalsa (minimal ALSA userspace library, used on target only for audio output)
 ifeq ($(wildcard $(TINYALSA_DIR)),)
 $(info Cloning tinyalsa...)
-$(shell git clone --depth 1 https://github.com/tinyalsa/tinyalsa.git)
+$(shell $(call clone_pinned,https://github.com/tinyalsa/tinyalsa.git,$(TINYALSA_DIR),$(TINYALSA_COMMIT)))
 endif
 
 # FAAD2 (AAC decoder, GPLv2 -- see LICENSE and README before assuming this
 # is fine for a derived project of yours)
 ifeq ($(wildcard $(FAAD2_DIR)),)
 $(info Cloning FAAD2...)
-$(shell git clone --depth 1 https://github.com/knik0/faad2.git)
+$(shell $(call clone_pinned,https://github.com/knik0/faad2.git,$(FAAD2_DIR),$(FAAD2_COMMIT)))
 endif
 
 # ALAC (Apple Lossless decoder, Apache 2.0 -- Apple's own reference decoder,
 # mirrored by mikebrady)
 ifeq ($(wildcard $(ALAC_DIR)),)
 $(info Cloning ALAC...)
-$(shell git clone --depth 1 https://github.com/mikebrady/alac.git)
+$(shell $(call clone_pinned,https://github.com/mikebrady/alac.git,$(ALAC_DIR),$(ALAC_COMMIT)))
 endif
 
 # Xiph's Opus stack: libopus handles the codec, libogg the container, and
@@ -416,7 +433,7 @@ endif
 # APIs speak JSON, so this avoids needing an XML parser at all.
 ifeq ($(wildcard $(CJSON_DIR)),)
 $(info Cloning cJSON...)
-$(shell git clone --depth 1 https://github.com/DaveGamble/cJSON.git)
+$(shell $(call clone_pinned,https://github.com/DaveGamble/cJSON.git,$(CJSON_DIR),$(CJSON_COMMIT)))
 endif
 
 # libdbus (AFL-2.1/GPL-2+ dual-licensed) -- target only, for the AVRCP
@@ -460,7 +477,7 @@ endif
 # backtrace_symbols_fd() unconditionally on both builds.
 ifeq ($(wildcard $(LIBEXECINFO_DIR)),)
 $(info Cloning libexecinfo...)
-$(shell git clone --depth 1 https://github.com/fam007e/libexecinfo.git $(LIBEXECINFO_DIR))
+$(shell $(call clone_pinned,https://github.com/fam007e/libexecinfo.git,$(LIBEXECINFO_DIR),$(LIBEXECINFO_COMMIT)))
 endif
 # getreturnaddr()/getframeaddr() (used by execinfo.c's backtrace()) aren't
 # committed as a .c file upstream -- their own Makefile generates
@@ -520,6 +537,17 @@ CFLAGS += -I$(WAVPACK_DIR)/include -I$(SNDFILE_DIR)/include
 CXXFLAGS = $(filter-out -Wall,$(CFLAGS)) -std=c++11
 HOST_CFLAGS = $(CFLAGS) -DHOST_BUILD=1 $(BOARD_DEFINE) $(UI_PERF_TRACE_DEFINE) $(shell sdl2-config --cflags) -I$(TINFL_DIR) -DMINIZ_NO_DEFLATE_APIS -DMINIZ_NO_ARCHIVE_APIS
 HOST_CXXFLAGS = $(CXXFLAGS) -DHOST_BUILD=1 $(BOARD_DEFINE) $(UI_PERF_TRACE_DEFINE) $(shell sdl2-config --cflags) -I$(TINFL_DIR) -DMINIZ_NO_DEFLATE_APIS -DMINIZ_NO_ARCHIVE_APIS
+# macOS simulator: `make host` on a Mac. The code is written for Linux;
+# src/host/macos/ fills the gaps (stand-in headers for Linux-only includes,
+# and macos_compat.h, force-included into every host file). None of it
+# reaches the device build or the Linux simulator.
+HOST_UNAME := $(shell uname -s)
+ifeq ($(HOST_UNAME),Darwin)
+HOST_MACOS_CFLAGS = -D_DARWIN_C_SOURCE -Isrc/host/macos/include -include src/host/macos/macos_compat.h -I$(shell sdl2-config --prefix)/include
+HOST_CFLAGS += $(HOST_MACOS_CFLAGS)
+HOST_CXXFLAGS += $(HOST_MACOS_CFLAGS)
+HOST_MACOS_SRCS = src/host/macos/macos_compat.c
+endif
 # Optional: `make target TEST_BUILD_TAG=test25_avrcp` -- replaces the release
 # label in About with a conspicuous test-build identity, so a binary running
 # on the device can be identified without checking timestamps or hashes.
@@ -740,7 +768,7 @@ $(TARGET_CODE_SECTION_FLAGS_STAMP): FORCE_TARGET_CODE_SECTION_FLAGS
 CFLAGS += -Isonic
 CFLAGS += $(EXTRA_CFLAGS)
 
-APP_SRCS = src/app/main.c src/ui/application/gui.c src/ui/library/library_selection_snapshot.c src/ui/library/library_az_index.c src/ui/network/subsonic/gui_subsonic.c src/ui/network/subsonic/gui_subsonic_settings.c src/ui/network/subsonic/gui_subsonic_download.c src/ui/network/subsonic/gui_subsonic_connect.c src/ui/network/subsonic/gui_subsonic_actions.c src/ui/network/subsonic/gui_subsonic_browse.c src/ui/network/subsonic/gui_subsonic_sync.c src/ui/network/subsonic/gui_subsonic_views.c src/ui/network/subsonic/gui_subsonic_menu.c src/ui/network/subsonic/gui_subsonic_sections.c src/ui/network/subsonic/gui_subsonic_genres.c src/ui/network/subsonic/gui_subsonic_covers.c src/ui/network/subsonic/gui_subsonic_album.c src/ui/network/subsonic/gui_subsonic_album_cover.c src/ui/network/subsonic/gui_subsonic_cover_flow.c src/ui/settings/gui_settings.c src/ui/settings/gui_settings_music.c src/ui/settings/gui_settings_display.c src/ui/settings/gui_settings_power.c src/ui/settings/gui_settings_system.c src/ui/network/gui_network.c src/ui/appearance/gui_theme.c src/ui/shell/gui_notifications.c src/ui/library/browse/gui_library.c src/ui/library/browse/gui_library_collections.c src/ui/library/browse/gui_favorite_albums.c src/ui/library/browse/gui_library_sd.c src/ui/library/browse/gui_library_usb_drive.c src/ui/library/browse/gui_library_artist.c src/ui/library/browse/gui_library_browse.c src/ui/library/browse/gui_all_songs_rating.c src/ui/library/browse/gui_album_rating.c src/ui/library/browse/gui_rating_lifecycle.c src/ui/library/browse/gui_library_group_songs.c src/ui/library/browse/gui_group_songs_rows.c src/ui/library/browse/gui_group_songs_edit.c src/ui/library/browse/gui_library_scan.c src/ui/player/screen/gui_queue.c src/ui/player/screen/gui_player.c src/ui/player/screen/gui_track_info.c src/ui/plugins/gui_plugins.c src/ui/shell/gui_shell.c src/ui/shell/gui_navigation.c src/ui/library/collections/gui_books.c src/ui/library/browse/gui_file_manager.c src/ui/library/browse/gui_image_view.c src/ui/text/rendering/gui_text_input.c src/ui/player/screen/gui_lyrics.c src/ui/shell/gui_reload.c src/audio/engine/audio.c src/audio/engine/audio_dr_impl.c src/audio/engine/audio_decoder_open.c src/audio/engine/audio_decoder_io.c src/audio/engine/audio_readahead.c src/audio/engine/audio_waveform.c src/audio/engine/audio_mp3_index.c src/audio/engine/audio_output_sink.c src/audio/engine/audio_volume.c src/library/browser/files/file_browser.c src/library/browser/files/file_ops.c src/hardware/input/hw_buttons.c src/hardware/input/button_mapping.c src/hardware/input/input_device_utils.c src/library/metadata/parsing/metadata.c src/library/metadata/parsing/metadata_id3.c src/library/metadata/parsing/metadata_xiph_mp4.c src/library/metadata/parsing/metadata_iff.c src/library/metadata/scan/library_walk.c src/library/metadata/db/metadata_db.c src/core/persistence/settings.c src/core/ui/display/startup_splash.c src/core/system/lifecycle/screenshot.c src/core/system/runtime/app_version.c src/audio/decoders/aiff/aiff_decoder.c src/audio/decoders/dsd/dsd_filter.c src/audio/decoders/dsd/dsd_decoder.c src/audio/readers/sacd/sacd_reader.c src/audio/decoders/dst/dst_decoder.c src/library/sacd/sacd_iso.c src/audio/decoders/aac/aac_decoder.c src/audio/demux/mp4/mp4_demux.c src/audio/demux/caf/caf_demux.c src/audio/demux/ape/ape_demux.c src/audio/decoders/ape/ape_decoder.c src/audio/decoders/ape/ape_ffmpeg_core.c src/audio/effects/biquad_cookbook.c src/audio/effects/peq.c src/audio/effects/mseb.c src/audio/effects/soundstage.c src/audio/effects/soundstage_dsp.c src/audio/effects/soundstage_room.c src/audio/effects/soundstage_run.c src/audio/timing/audio_tempo.c src/ui/assets/assets.c src/ui/widgets/builders/screen_builders.c src/ui/assets/cover_card_preview.c src/hardware/power/battery.c src/network/wifi/wifi_status.c src/network/security/ca_bundle.c src/network/http/client/http_conn.c src/network/http/client/http_client.c src/network/download/download.c src/core/files/file_integrity.c src/network/http/stream/http_stream.c src/network/http/stream/http_stream_file.c src/network/services/subsonic_client.c src/library/artwork/decode/cover_decode.c src/library/artwork/cache/image_thumb.c src/library/text/lyrics/lyrics.c src/audio/decoders/asf/asf_demux.c src/audio/decoders/wma/wma_decoder.c src/audio/decoders/ogg/ogg_probe.c src/audio/decoders/ogg/opus_decoder.c src/audio/decoders/ogg/opusfile_alloc.c src/audio/decoders/wavpack/wavpack_decoder.c src/audio/decoders/caf/caf_decoder.c src/audio/decoders/vorbis/vorbis_decoder.c src/library/parsers/cue/cue_parser.c src/ui/text/rendering/fallback_font.c src/ui/text/rendering/gui_text_view.c \
+APP_SRCS = src/app/main.c src/ui/application/gui.c src/ui/library/library_selection_snapshot.c src/ui/library/library_az_index.c src/ui/network/subsonic/gui_subsonic.c src/ui/network/subsonic/gui_subsonic_settings.c src/ui/network/subsonic/gui_subsonic_download.c src/ui/network/subsonic/gui_subsonic_connect.c src/ui/network/subsonic/gui_subsonic_actions.c src/ui/network/subsonic/gui_subsonic_browse.c src/ui/network/subsonic/gui_subsonic_sync.c src/ui/network/subsonic/gui_subsonic_views.c src/ui/network/subsonic/gui_subsonic_menu.c src/ui/network/subsonic/gui_subsonic_sections.c src/ui/network/subsonic/gui_subsonic_genres.c src/ui/network/subsonic/gui_subsonic_covers.c src/ui/network/subsonic/gui_subsonic_album.c src/ui/network/subsonic/gui_subsonic_album_cover.c src/ui/network/subsonic/gui_subsonic_cover_flow.c src/ui/settings/gui_settings.c src/ui/settings/gui_settings_music.c src/ui/settings/gui_settings_display.c src/ui/settings/gui_settings_power.c src/ui/settings/gui_settings_system.c src/ui/network/gui_network.c src/ui/appearance/gui_theme.c src/ui/shell/gui_notifications.c src/ui/library/browse/gui_library.c src/ui/library/browse/gui_library_collections.c src/ui/library/browse/gui_favorite_albums.c src/ui/library/browse/gui_library_sd.c src/ui/library/browse/gui_library_usb_drive.c src/ui/library/browse/gui_library_artist.c src/ui/library/browse/gui_library_browse.c src/ui/library/browse/gui_all_songs_rating.c src/ui/library/browse/gui_album_rating.c src/ui/library/browse/gui_rating_lifecycle.c src/ui/library/browse/gui_library_group_songs.c src/ui/library/browse/gui_group_songs_rows.c src/ui/library/browse/gui_group_songs_edit.c src/ui/library/browse/gui_library_scan.c src/ui/player/screen/gui_queue.c src/ui/player/screen/gui_player.c src/ui/player/screen/gui_track_info.c src/ui/plugins/gui_plugins.c src/ui/shell/gui_shell.c src/ui/shell/gui_navigation.c src/ui/library/collections/gui_books.c src/ui/library/browse/gui_file_manager.c src/ui/library/browse/gui_image_view.c src/ui/text/rendering/gui_text_input.c src/ui/player/screen/gui_lyrics.c src/ui/shell/gui_reload.c src/audio/engine/audio.c src/audio/engine/audio_dr_impl.c src/audio/engine/audio_decoder_open.c src/audio/engine/audio_decoder_io.c src/audio/engine/audio_readahead.c src/audio/engine/audio_waveform.c src/audio/engine/audio_mp3_index.c src/audio/engine/audio_output_sink.c src/audio/engine/audio_volume.c src/library/browser/files/file_browser.c src/library/browser/files/file_ops.c src/hardware/input/hw_buttons.c src/hardware/input/button_mapping.c src/hardware/input/input_device_utils.c src/library/metadata/parsing/metadata.c src/library/metadata/parsing/metadata_id3.c src/library/metadata/parsing/metadata_xiph_mp4.c src/library/metadata/parsing/metadata_iff.c src/library/metadata/scan/library_walk.c src/library/metadata/db/metadata_db.c src/core/persistence/settings.c src/core/ui/display/startup_splash.c src/core/system/lifecycle/screenshot.c src/core/system/runtime/app_version.c src/audio/decoders/aiff/aiff_decoder.c src/audio/decoders/dsd/dsd_filter.c src/audio/decoders/dsd/dsd_decoder.c src/audio/readers/sacd/sacd_reader.c src/audio/decoders/dst/dst_decoder.c src/library/sacd/sacd_iso.c src/audio/decoders/aac/aac_decoder.c src/audio/demux/mp4/mp4_demux.c src/audio/demux/caf/caf_demux.c src/audio/demux/ape/ape_demux.c src/audio/decoders/ape/ape_decoder.c src/audio/decoders/ape/ape_ffmpeg_core.c src/audio/effects/biquad_cookbook.c src/audio/effects/peq.c src/audio/effects/mseb.c src/audio/effects/soundstage.c src/audio/effects/soundstage_dsp.c src/audio/effects/soundstage_room.c src/audio/effects/soundstage_run.c src/audio/timing/audio_tempo.c src/ui/assets/assets.c src/ui/widgets/builders/screen_builders.c src/ui/assets/cover_card_preview.c src/hardware/power/battery.c src/network/wifi/wifi_status.c src/network/security/ca_bundle.c src/network/http/client/http_conn.c src/network/http/client/mdns_resolve.c src/network/http/client/http_client.c src/network/download/download.c src/core/files/file_integrity.c src/network/http/stream/http_stream.c src/network/http/stream/http_stream_file.c src/network/services/subsonic_client.c src/network/services/discworld_sync.c src/library/artwork/decode/cover_decode.c src/library/artwork/cache/image_thumb.c src/library/text/lyrics/lyrics.c src/audio/decoders/asf/asf_demux.c src/audio/decoders/wma/wma_decoder.c src/audio/decoders/ogg/ogg_probe.c src/audio/decoders/ogg/opus_decoder.c src/audio/decoders/ogg/opusfile_alloc.c src/audio/decoders/wavpack/wavpack_decoder.c src/audio/decoders/caf/caf_decoder.c src/audio/decoders/vorbis/vorbis_decoder.c src/library/parsers/cue/cue_parser.c src/ui/text/rendering/fallback_font.c src/ui/text/rendering/gui_text_view.c \
 src/core/process/subprocess.c src/network/wifi/wifi_control.c src/network/wifi/wifi_dhcp.c src/network/bluetooth/control/bluetooth_control.c src/network/bluetooth/control/bt_codec_policy.c src/network/bluetooth/control/bt_devices.c src/network/bluetooth/control/bt_control_daemon.c src/network/bluetooth/control/bt_output_watch.c src/network/bluetooth/control/bt_transport_info.c src/network/bluetooth/control/bt_source_volume.c src/network/bluetooth/control/bt_debug_capture.c src/network/bluetooth/control/bt_dac_info.c src/network/hiby/hiby_sys_server.c src/hardware/indicators/backlight.c src/network/remote/import/remote_import_files.c src/network/airplay/airplay_control.c src/network/airplay/airplay_bridge.c src/network/airplay/airplay_metadata.c src/hardware/device/headphone_status.c src/hardware/device/device_config.c src/hardware/indicators/led_control.c src/hardware/power/charge_limiter.c src/core/system/lifecycle/idle_shutdown.c src/hardware/power/power_suspend.c src/core/text/text_reader.c src/hardware/usb/usb_mode_control.c src/hardware/usb/wireless_adb.c src/hardware/usb/usb_dac_bridge.c src/hardware/usb/usb_audio_output.c src/core/updates/firmware_update.c src/core/updates/player_update.c src/core/system/lifecycle/reboot_handoff.c src/library/playlists/playlist_files.c src/library/playlists/rating_writer.c src/network/firmware/firmware_ota.c src/network/store/plugins/plugin_store.c src/network/store/plugins/plugin_store_catalog.c src/network/store/plugins/plugin_store_card.c src/network/store/plugins/plugin_store_workers.c src/network/store/plugins/plugin_store_preview.c src/network/store/plugins/store_common.c src/network/store/catalog/emulator_store.c src/core/device/emulator_registry.c src/core/time/timezone_data.c src/core/time/timezone_apply.c src/core/device/hostname_apply.c src/network/services/dlna_control.c src/network/remote/control/remote_control.c src/network/remote/discovery/remote_control_discovery.c src/network/store/catalog/catalog_source_cache.c src/network/remote/discovery/remote_control_mdns.c src/plugins/manager/plugin_manager.c
 APP_SRCS += src/core/persistence/native_audio_settings.c src/ui/settings/gui_native_audio.c src/ui/settings/gui_play_through.c
 APP_SRCS += src/ui/assets/gui_image_dsc.c
@@ -762,6 +790,8 @@ APP_SRCS += src/ui/settings/gui_about_info.c
 APP_SRCS += src/ui/plugins/gui_plugin_library.c
 APP_SRCS += src/ui/application/gui_screen_off_memory.c
 APP_SRCS += src/ui/application/gui_screen_power.c src/ui/application/gui_control_poll.c
+APP_SRCS += src/ui/library/favorites/gui_favorites.c src/ui/home/favorites_icon.c src/library/playlists/list_positions.c
+APP_SRCS += src/ui/library/audiobooks/gui_audiobooks.c src/ui/home/audiobooks_icon.c
 APP_SRCS += src/ui/settings/controls/gui_external_controls.c
 APP_SRCS += src/ui/plugins/manage/gui_plugin_order_editor.c
 APP_SRCS += src/ui/player/settings/gui_equalizer.c
@@ -797,7 +827,7 @@ APP_SRCS += src/plugins/bindings/ui/plugin_text_view_bindings.c src/ui/player/qu
 APP_SRCS += src/plugins/bindings/io/plugin_archive_bindings.c
 APP_SRCS += src/ui/library/library_thumbnails.c src/ui/library/library_thumbnails_cache.c src/ui/library/library_thumbnails_lazy.c src/ui/library/library_thumbnails_warmer.c src/ui/library/library_thumbnails_warm_artists.c src/ui/library/library_thumbnails_prewarm.c src/ui/library/library_thumbnail_placeholder.c
 APP_SRCS += src/ui/library/library_search.c
-APP_SRCS += src/ui/network/gui_network_wifi.c src/ui/network/gui_network_wifi_screen.c src/ui/network/gui_network_bt.c src/ui/network/gui_network_pairing.c src/ui/network/gui_network_receivers.c src/ui/network/gui_network_bt_dac.c src/ui/network/gui_network_dac_screen.c src/ui/network/gui_network_usb_dac.c src/ui/network/gui_network_usb.c src/ui/network/gui_network_services.c src/ui/network/gui_network_choice.c
+APP_SRCS += src/ui/network/gui_network_wifi.c src/ui/network/gui_network_wifi_screen.c src/ui/network/gui_network_bt.c src/ui/network/gui_network_pairing.c src/ui/network/gui_network_receivers.c src/ui/network/gui_network_bt_dac.c src/ui/network/gui_network_dac_screen.c src/ui/network/gui_network_usb_dac.c src/ui/network/gui_network_usb.c src/ui/network/gui_network_services.c src/ui/network/gui_network_choice.c src/ui/network/gui_network_discworld.c
 APP_SRCS += src/ui/player/queue/player_queue_model.c src/ui/player/queue/player_queue_resume.c src/ui/player/queue/resume_crash_guard.c src/ui/player/queue/player_queue_controller.c src/ui/player/queue/player_queue_remote.c
 APP_SRCS += src/ui/player/transport/player_playback.c src/ui/player/screen/gui_player_metadata.c src/ui/player/screen/gui_player_track_source.c src/ui/player/screen/gui_player_more_menu.c src/ui/player/layout/player_count_row.c
 APP_SRCS += src/ui/library/browse/gui_folder_actions.c src/ui/library/playlists/gui_playlists.c src/ui/library/playlists/gui_playlist_target.c
@@ -945,7 +975,11 @@ TARGET_ONLY_APP_SRCS += src/core/math/fast_lrintf.c
 LIBEXECINFO_SRCS = $(LIBEXECINFO_DIR)/execinfo.c $(LIBEXECINFO_DIR)/stacktraverse.c
 
 # Object files
-HOST_OBJS = $(BUILD_HOST_DIR)/sonic/sonic.o $(APP_SRCS:src/%.c=$(BUILD_HOST_DIR)/%.o) $(APP_CXX_SRCS:src/%.cpp=$(BUILD_HOST_DIR)/%.o) \
+# The simulator fakes Wi-Fi (src/host/sim_wifi.c) instead of driving
+# wpa_supplicant and udhcpc; the computer's own network carries the traffic.
+HOST_SIM_WIFI_REPLACES = src/network/wifi/wifi_control.c src/network/wifi/wifi_status.c src/network/wifi/wifi_dhcp.c
+HOST_APP_SRCS = $(filter-out $(HOST_SIM_WIFI_REPLACES),$(APP_SRCS)) src/host/sim_wifi.c
+HOST_OBJS = $(BUILD_HOST_DIR)/sonic/sonic.o $(HOST_APP_SRCS:src/%.c=$(BUILD_HOST_DIR)/%.o) $(HOST_MACOS_SRCS:src/%.c=$(BUILD_HOST_DIR)/%.o) $(APP_CXX_SRCS:src/%.cpp=$(BUILD_HOST_DIR)/%.o) \
             $(LVGL_SRCS:$(LVGL_DIR)/%.c=$(BUILD_HOST_DIR)/lvgl/%.o) $(LV_XML_SRCS:$(LV_XML_DIR)/%.c=$(BUILD_HOST_DIR)/lv_xml/%.o) $(FAAD2_SRCS:$(FAAD2_DIR)/libfaad/%.c=$(BUILD_HOST_DIR)/faad2/%.o) \
             $(ALAC_C_SRCS:$(ALAC_DIR)/codec/%.c=$(BUILD_HOST_DIR)/alac/%.o) $(ALAC_CXX_SRCS:$(ALAC_DIR)/codec/%.cpp=$(BUILD_HOST_DIR)/alac/%.o) \
             $(MBEDTLS_SRCS:$(MBEDTLS_DIR)/library/%.c=$(BUILD_HOST_DIR)/mbedtls/%.o) $(CJSON_SRCS:$(CJSON_DIR)/%.c=$(BUILD_HOST_DIR)/cjson/%.o) \

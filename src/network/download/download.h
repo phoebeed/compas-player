@@ -21,6 +21,7 @@ typedef struct {
     unsigned max_redirects;
     uint32_t connect_timeout_ms, read_timeout_ms, total_timeout_ms;
     int required_status;
+    const char *cookie; /* optional Cookie header for the first hop; see http_file_request_t */
 } download_request_t;
 
 typedef struct {

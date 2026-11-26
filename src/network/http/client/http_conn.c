@@ -9,6 +9,7 @@
 #include "../../../core/process/worker_thread.h"
 #include "http_conn.h"
 #include "http_client.h" /* for struct http_cancel_token's real definition */
+#include "mdns_resolve.h"
 #include "../../security/ca_bundle.h"
 
 #include <string.h>
@@ -85,6 +86,44 @@ static void cancel_unregister_and_close(struct http_cancel_token * cancel, int f
  * to join it. This deliberately leaks a small ctx struct and one thread
  * stack until that eventually-returning call completes -- an accepted
  * tradeoff for turning an unbounded hang into a bounded one. */
+/* Names pinned to an address (http_pin_host): looked up before anything
+ * else, so a URL keeps its name (Host header, TLS server name) while the
+ * connection goes to an address found some other way. */
+#define HTTP_PIN_MAX 4
+static pthread_mutex_t pin_mutex = PTHREAD_MUTEX_INITIALIZER;
+static struct { char host[128]; char ip[48]; } pins[HTTP_PIN_MAX];
+
+void http_pin_host(const char * host, const char * ip) {
+    if (!host || !host[0] || strlen(host) >= sizeof(pins[0].host)) return;
+    bool clear = !ip || !ip[0] || strlen(ip) >= sizeof(pins[0].ip);
+    pthread_mutex_lock(&pin_mutex);
+    int slot = -1, empty = -1;
+    for (int i = 0; i < HTTP_PIN_MAX; i++) {
+        if (pins[i].host[0] && strcasecmp(pins[i].host, host) == 0) slot = i;
+        else if (!pins[i].host[0] && empty < 0) empty = i;
+    }
+    if (clear) {
+        if (slot >= 0) pins[slot].host[0] = pins[slot].ip[0] = '\0';
+    } else {
+        if (slot < 0) slot = empty >= 0 ? empty : 0;
+        snprintf(pins[slot].host, sizeof(pins[slot].host), "%s", host);
+        snprintf(pins[slot].ip, sizeof(pins[slot].ip), "%s", ip);
+    }
+    pthread_mutex_unlock(&pin_mutex);
+}
+
+static bool pin_lookup(const char * host, char * out, size_t size) {
+    bool found = false;
+    pthread_mutex_lock(&pin_mutex);
+    for (int i = 0; i < HTTP_PIN_MAX && !found; i++)
+        if (pins[i].host[0] && strcasecmp(pins[i].host, host) == 0) {
+            snprintf(out, size, "%s", pins[i].ip);
+            found = true;
+        }
+    pthread_mutex_unlock(&pin_mutex);
+    return found;
+}
+
 typedef struct {
     char host[256];
     char port[16];
@@ -104,7 +143,19 @@ static void * dns_resolve_thread_func(void * arg) {
     hints.ai_family = AF_UNSPEC;
     hints.ai_socktype = SOCK_STREAM;
     hints.ai_protocol = IPPROTO_TCP;
-    int rc = getaddrinfo(ctx->host, ctx->port, &hints, &addr_list);
+    /* "name.local" lives in multicast DNS, which musl's resolver never asks:
+     * look it up there first and hand getaddrinfo() the address, so the
+     * result is still an ordinary addrinfo list. A home router that also
+     * serves the name in plain DNS is the fallback. */
+    char mdns_addr[48];
+    int rc = EAI_NONAME;
+    if (pin_lookup(ctx->host, mdns_addr, sizeof(mdns_addr)) ||
+        (mdns_is_local_name(ctx->host) && mdns_resolve_ipv4(ctx->host, 1500, mdns_addr, sizeof(mdns_addr)))) {
+        hints.ai_flags = AI_NUMERICHOST;
+        rc = getaddrinfo(mdns_addr, ctx->port, &hints, &addr_list);
+        hints.ai_flags = 0;
+    }
+    if (rc != 0) rc = getaddrinfo(ctx->host, ctx->port, &hints, &addr_list);
 
     pthread_mutex_lock(&ctx->mutex);
     if (ctx->abandoned) {

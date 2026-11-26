@@ -37,6 +37,8 @@
 #include <unistd.h>
 #include "../settings/controls/gui_remote_settings.h"
 #include "gui_internal.h"
+#include "../library/favorites/gui_favorites.h"
+#include "../library/audiobooks/gui_audiobooks.h"
 
 #ifdef HOST_BUILD
 #define GUI_BOOT_CHECKPOINT(step) ((void) 0)
@@ -433,6 +435,8 @@ static void build_startup_network_settings_screens(void) {
     GUI_BOOT_CHECKPOINT("gui_plugin_store_init done");
     gui_emulator_store_init();
     gui_books_init();
+    gui_favorites_init();
+    gui_audiobooks_init();
     build_power_off_countdown_popup();
     gui_queue_init();
 }

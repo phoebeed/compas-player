@@ -193,6 +193,23 @@ typedef struct {
     } subsonic_saved[SETTINGS_SUBSONIC_SAVED_MAX];
     int subsonic_saved_count;
 
+    /* Discworld (the home media server) Wi-Fi sync; see discworld_sync.h.
+     * The password is Discworld's APP_PASSWORD, kept in plaintext like the
+     * Subsonic one above. auto_ssid: sync by itself while joined to this
+     * network (empty: only when asked). charging_only: never sync on battery. */
+    char discworld_url[256];
+    char discworld_ip[48];    /* address the sync last reached discworld_url's name at, when names did not work */
+    char discworld_password[128];
+    /* The people whose favourite playlists the player keeps, comma
+     * separated ("Rachel, Phoebe, Amelie"): Home > Favourites shows one
+     * button each, reading Playlists/Favourites/<name>/, and the Discworld
+     * sync fills those folders with each one's playlists. Empty: one flat
+     * Favourites list. */
+    char favorites_people[160];
+    char discworld_auto_ssid[33];
+    bool discworld_charging_only;
+    int discworld_last_sync; /* time() of the last sync that finished, 0: never */
+
     /* Local Cirrus DAC controls. Filter enum 0..3; NOS disables the
      * interpolation filter. DRE defaults on to match the R3 Pro II codec. */
     int dac_filter;
@@ -249,8 +266,17 @@ typedef struct {
      * "Available Devices" list (shown as raw MAC addresses otherwise).
      * Paired devices are always shown regardless of this setting. */
     bool bt_hide_unnamed_devices;
+    /* When false, no cover art URL goes to BlueZ, so AVRCP replies carry no
+     * image handle. Some head units (a 2018 Fiat 500) stop reading the reply
+     * at that handle and lose the title that BlueZ sends after it. */
+    bool bt_send_cover_art;
     bool wifi_restore_at_startup;
     bool bt_restore_at_startup;
+    /* When true, playback that paused because the Bluetooth output dropped
+     * resumes once an A2DP output reconnects (a car turned back on). Off by
+     * default: a headset that reconnects on its own would otherwise start
+     * playing unasked. */
+    bool bt_resume_on_reconnect;
     bool wifi_last_on;
     bool bt_last_on;
 

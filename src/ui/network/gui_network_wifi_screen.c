@@ -5,6 +5,7 @@
 #include <stdio.h>
 #include <string.h>
 #include "gui_network_internal.h"
+#include "gui_network_discworld.h"
 
 
 /* ---- Wi-Fi settings screen ----
@@ -317,6 +318,8 @@ void populate_wifi_screen(bool enabled) {
     if (enabled) add_pill_chevron_row(wifi_list, TR("Manual SSID entry"), wifi_manual_entry_row_cb);
     /* Stays reachable while Wi-Fi is off: Restore at Startup lives there. */
     add_pill_chevron_row(wifi_list, TR("Advanced"), wifi_advanced_row_cb);
+    /* Music and playlists from the Discworld server at home (gui_network_discworld.c). */
+    add_pill_chevron_row(wifi_list, TR("Discworld sync"), gui_network_discworld_row_cb);
 
     if (!enabled) goto restore_scroll;
 

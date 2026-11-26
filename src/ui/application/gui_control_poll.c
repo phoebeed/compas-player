@@ -27,6 +27,9 @@
 #include <stdlib.h>
 #include <string.h>
 #include "gui_internal.h"
+#include "../network/gui_network_discworld.h"
+#include "../library/favorites/gui_favorites.h"
+#include "../library/audiobooks/gui_audiobooks.h"
 
 #ifdef UI_PERF_TRACE
 #include "../diagnostics/ui_frame_trace.h"
@@ -243,6 +246,7 @@ static void poll_network_jobs(void) {
     poll_subsonic_refresh();
     poll_subsonic_covers();
     poll_wifi_scan();
+    gui_network_discworld_poll();
     poll_wifi_connect();
     poll_wifi_connect_saved();
     poll_wifi_disconnect();
@@ -271,6 +275,8 @@ static void poll_storage_jobs(void) {
     PERF_MARK("sd_hotplug");
     poll_usb_drive_hotplug();
     gui_library_poll_playlists();
+    gui_favorites_poll();
+    gui_audiobooks_poll();
     gui_library_poll_track_probes();
     PERF_MARK("storage_jobs");
 }
@@ -337,7 +343,8 @@ static bool bt_output_connected_debounced(void) {
      * grace period: BlueALSA can remove/re-add its PCM while changing
      * sample rates without disconnecting the headphones. Only a
      * confirmed removal bypasses the slower polling fallback above.
-     * The event is consumed once; reconnection never auto-resumes. */
+     * The event is consumed once; reconnection resumes only with the
+     * opt-in bt_resume_on_reconnect (see poll_output_connection()). */
     bool bt_disconnect_event = bt_control_output_disconnect_consume();
     if (bt_disconnect_event) {
         gui_shell_notify_bt_audio_disconnected();
@@ -369,10 +376,48 @@ static bool bt_output_connected_debounced(void) {
  * there's no real disconnect to protect against on host, since the dev
  * machine's own speakers are the actual output regardless of this
  * app's simulated jack/BT state. */
+/* Resume waits this long after the A2DP output comes back, so a head unit
+ * that is still unmuting does not swallow the first seconds of the track. */
+#define BT_RESUME_SETTLE_MS 2000
+
+/* Playback that a Bluetooth drop paused, waiting for the output to return.
+ * Cleared by anything that means the user moved on: they pressed play or
+ * stop, or turned the setting off. */
+static bool bt_resume_pending = false;
+static uint32_t bt_resume_connected_since = 0; /* 0 = not seen reconnected yet */
+
+static void poll_bt_resume_on_reconnect(void) {
+    if (!bt_resume_pending) return;
+    if (!current_settings.bt_resume_on_reconnect || audio_is_playing() || !audio_is_paused()) {
+        bt_resume_pending = false;
+        return;
+    }
+    /* The raw connected state, not the debounced one: the debounce only
+     * delays declaring a disconnect, a reconnect is real at once. The audio
+     * route switches to Bluetooth in the same update that sets this. */
+    if (!gui_shell_is_bt_audio_connected() || current_settings.bt_dac_mode_enabled) {
+        bt_resume_connected_since = 0;
+        return;
+    }
+    if (bt_resume_connected_since == 0) {
+        bt_resume_connected_since = lv_tick_get();
+        if (bt_resume_connected_since == 0) bt_resume_connected_since = 1;
+        return;
+    }
+    if (lv_tick_elaps(bt_resume_connected_since) < BT_RESUME_SETTLE_MS) return;
+    bt_resume_pending = false;
+    DBG_LOG("gui: Bluetooth output reconnected -- resuming playback\n");
+    toggle_play_pause();
+    if (audio_is_playing()) show_info_toast(TR("Resumed: Bluetooth reconnected"));
+}
+
 static void poll_output_connection(void) {
     bool bt_connected_debounced = bt_output_connected_debounced();
 
     static bool last_output_connected = true; /* starts true so nothing fires before any real state has been sampled */
+    /* Audio goes to Bluetooth whenever it is connected, so if it was
+     * connected on the last tick it is the output that just went away. */
+    static bool last_bt_connected = false;
     /* Headphone detection covers both single-ended and balanced jacks. */
     bool output_connected = get_headphone_state() != HEADPHONE_STATE_NONE || bt_connected_debounced;
     /* Pause playback on disconnect while preserving decoder and position
@@ -380,12 +425,20 @@ static void poll_output_connection(void) {
      * if audio is actively playing to avoid toggling an already-paused track. */
     bool was_playing = audio_is_playing();
     if (last_output_connected && !output_connected && was_playing) {
-        DBG_LOG("gui: output disconnected while playing -- pausing playback\n");
+        bool bt_dropped = last_bt_connected;
+        DBG_LOG("gui: %s disconnected while playing -- pausing playback\n",
+                bt_dropped ? "Bluetooth output" : "headphone output");
         audio_toggle_pause();
         set_play_button_state(false);
-        show_info_toast(TR("Paused: headphones disconnected"));
+        show_info_toast(bt_dropped ? TR("Paused: Bluetooth disconnected")
+                                   : TR("Paused: headphones disconnected"));
+        bt_resume_pending = bt_dropped && current_settings.bt_resume_on_reconnect;
+        bt_resume_connected_since = 0;
     }
     last_output_connected = output_connected;
+    last_bt_connected = bt_connected_debounced;
+
+    poll_bt_resume_on_reconnect();
 
     /* Synchronize balanced output routing for hardware supporting balanced jacks. */
     audio_output_sync_balanced_output();

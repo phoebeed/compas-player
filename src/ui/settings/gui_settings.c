@@ -178,9 +178,16 @@ static void dac_home_usb_row_cb(lv_event_t * e) {
     if (lv_event_get_code(e) == LV_EVENT_CLICKED) gui_network_open_usb_dac();
 }
 
+static void more_wireless_row_cb(lv_event_t * e) {
+    if (lv_event_get_code(e) == LV_EVENT_CLICKED) nav_push(gui_network_get_wireless_screen());
+}
+
 PLUGIN_ROW_CLICK_CB(plugin_more_list_item_click_cb, plugin_manager_more_list_item_clicked)
 
 static const struct { const char * icon; const char * label; lv_event_cb_t cb; } native[] = {
+    /* Home's Wireless tile made room for Audiobooks; Wi-Fi and Bluetooth
+     * are reached from here instead. */
+    { "launcher/wireless.png", N_("Wireless"), more_wireless_row_cb },
     { "submenu/plugins.png", N_("Plugins"), gui_plugin_manage_row_cb },
     { "submenu/files.png", N_("File manager"), gui_file_manager_tile_cb },
     { "submenu/themes.png", N_("Themes"), themes_row_cb },

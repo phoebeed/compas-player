@@ -1,3 +1,4 @@
+#include "../../network/gui_network_discworld.h"
 #include "../../shell/gui_navigation.h"
 #include "../../text/i18n/i18n.h"
 #include "gui_library.h"
@@ -1265,7 +1266,7 @@ static lv_obj_t * build_music_screen(void) {
           cover_flow_tile_cb, NULL },
     };
     const ui_customization_t customization = ui_customization_effective();
-    icon_grid_item_t ordered_items[UI_ORDER_MAX];
+    icon_grid_item_t ordered_items[UI_ORDER_MAX + 1];
     int ordered_count = 0;
     int configured_music_count = customization.music.count;
     if (configured_music_count > UI_ORDER_MAX) configured_music_count = UI_ORDER_MAX;
@@ -1274,6 +1275,10 @@ static lv_obj_t * build_music_screen(void) {
         if (id < UI_MUSIC_COUNT) ordered_items[ordered_count++] = items[id];
         else ordered_items[ordered_count++] = music_plugin_item(id - UI_MUSIC_COUNT);
     }
+    /* Always last: copies new music, audiobooks and playlists from Discworld. */
+    ordered_items[ordered_count++] = (icon_grid_item_t) {
+        "submenu/update_database.png", NULL, TR("Discworld sync now"),
+        gui_network_discworld_sync_now_cb, NULL };
 
     /* Native Music remains a category list, with launcher theme styling
      * applied by the same builder as before. With no native or plugin

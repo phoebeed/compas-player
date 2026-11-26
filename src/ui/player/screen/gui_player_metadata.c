@@ -837,7 +837,7 @@ void gui_player_poll_stream_metadata(void) {
     const char * title = metadata.title[0] ? metadata.title : station_title;
     const char * artist = metadata.title[0] ? metadata.artist : station_artist;
     if (strcmp(gui_player_get_now_playing_title(), title) ||
-        strcmp(gui_player_get_now_playing_folder(), artist) ||
+        strcmp(gui_player_get_now_playing_artist(), artist) ||
         strcmp(gui_player_get_now_playing_album(), metadata.title[0] ? "" : station_album)) {
         player_set_track_display_text(title, artist, metadata.title[0] ? "" : station_album);
         player_transition_mark_dirty();
