@@ -2,7 +2,13 @@
 #include "../download/download.h"
 #include "cJSON.h"
 #include "../http/client/mdns_resolve.h"
+#include <arpa/inet.h>
 #include <ctype.h>
+#include <ifaddrs.h>
+#include <net/if.h>
+#include <netinet/in.h>
+#include <poll.h>
+#include <sys/socket.h>
 #include <errno.h>
 #include <fcntl.h>
 #include <limits.h>
@@ -1194,6 +1200,109 @@ static bool dw_probe(dw_ctx_t * x, const char * base, char * why, size_t why_siz
     return ours;
 }
 
+/* Names did not work (a router that does not pass mDNS on to the player):
+ * looks for anything on the home network that takes a connection on 443,
+ * 8080 or 80, many at once with a short wait, and writes each as a URL. */
+#define DW_SCAN_BATCH 96
+#define DW_SCAN_WAIT_MS 700
+#define DW_SCAN_MAX_HOSTS 1024
+#define DW_SCAN_MAX_FOUND 12
+
+typedef struct { uint32_t ip; uint16_t port; } dw_hit_t;
+
+static uint64_t dw_ms(void) {
+    struct timespec ts;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    return (uint64_t) ts.tv_sec * 1000ULL + (uint64_t) ts.tv_nsec / 1000000ULL;
+}
+
+static int dw_scan_batch(const uint32_t * ips, const uint16_t * ports, int n, dw_hit_t * hits, int nhits, int max) {
+    int fds[DW_SCAN_BATCH];
+    struct pollfd pfd[DW_SCAN_BATCH];
+    int open_count = 0;
+    for (int i = 0; i < n; i++) {
+        fds[i] = socket(AF_INET, SOCK_STREAM | SOCK_NONBLOCK | SOCK_CLOEXEC, 0);
+        pfd[i].fd = -1;
+        pfd[i].events = POLLOUT;
+        pfd[i].revents = 0;
+        if (fds[i] < 0) continue;
+        struct sockaddr_in a = { .sin_family = AF_INET, .sin_port = htons(ports[i]), .sin_addr.s_addr = htonl(ips[i]) };
+        int rc = connect(fds[i], (struct sockaddr *) &a, sizeof(a));
+        if (rc == 0 || errno == EINPROGRESS) { pfd[i].fd = fds[i]; open_count++; }
+    }
+    uint64_t end = dw_ms() + DW_SCAN_WAIT_MS;
+    while (open_count > 0 && nhits < max) {
+        uint64_t now = dw_ms();
+        if (now >= end) break;
+        int ready = poll(pfd, (nfds_t) n, (int) (end - now));
+        if (ready <= 0) { if (ready < 0 && errno == EINTR) continue; break; }
+        for (int i = 0; i < n; i++) {
+            if (pfd[i].fd < 0 || !pfd[i].revents) continue;
+            int err = 0;
+            socklen_t len = sizeof(err);
+            if (getsockopt(pfd[i].fd, SOL_SOCKET, SO_ERROR, &err, &len) == 0 && err == 0 && nhits < max) {
+                hits[nhits].ip = ips[i];
+                hits[nhits].port = ports[i];
+                nhits++;
+            }
+            pfd[i].fd = -1;
+            open_count--;
+        }
+    }
+    for (int i = 0; i < n; i++) if (fds[i] >= 0) close(fds[i]);
+    return nhits;
+}
+
+static int dw_scan_network(dw_ctx_t * x, char urls[][64], int max) {
+    struct ifaddrs * list = NULL;
+    if (getifaddrs(&list) != 0) return 0;
+    uint32_t self = 0, mask = 0;
+    for (struct ifaddrs * i = list; i; i = i->ifa_next) {
+        if (!i->ifa_addr || !i->ifa_netmask || i->ifa_addr->sa_family != AF_INET) continue;
+        if (!(i->ifa_flags & IFF_UP) || (i->ifa_flags & IFF_LOOPBACK)) continue;
+        uint32_t ip = ntohl(((struct sockaddr_in *) i->ifa_addr)->sin_addr.s_addr);
+        /* home networks only: 10/8, 172.16/12, 192.168/16 */
+        if (!((ip >> 24) == 10 || (ip >> 20) == 0xAC1 || (ip >> 16) == 0xC0A8)) continue;
+        self = ip;
+        mask = ntohl(((struct sockaddr_in *) i->ifa_netmask)->sin_addr.s_addr);
+        break;
+    }
+    freeifaddrs(list);
+    if (!self) return 0;
+    if (~mask + 1U > DW_SCAN_MAX_HOSTS || mask == 0) mask = 0xFFFFFF00U; /* a big network: its /24 */
+    uint32_t net = self & mask, count = ~mask + 1U;
+    static const uint16_t scan_ports[] = { 443, 8080, 80 };
+    dw_hit_t hits[DW_SCAN_MAX_FOUND];
+    int nhits = 0;
+    uint32_t ips[DW_SCAN_BATCH];
+    uint16_t ports[DW_SCAN_BATCH];
+    int n = 0;
+    for (size_t pi = 0; pi < sizeof(scan_ports) / sizeof(scan_ports[0]); pi++) {
+        for (uint32_t h = 1; h + 1 < count && nhits < DW_SCAN_MAX_FOUND; h++) {
+            uint32_t ip = net + h;
+            if (ip == self) continue;
+            ips[n] = ip;
+            ports[n] = scan_ports[pi];
+            if (++n == DW_SCAN_BATCH) {
+                if (dw_stopping(x)) return 0;
+                nhits = dw_scan_batch(ips, ports, n, hits, nhits, DW_SCAN_MAX_FOUND);
+                n = 0;
+            }
+        }
+    }
+    if (n && !dw_stopping(x)) nhits = dw_scan_batch(ips, ports, n, hits, nhits, DW_SCAN_MAX_FOUND);
+    int out = 0;
+    for (int i = 0; i < nhits && out < max; i++) {
+        struct in_addr a = { .s_addr = htonl(hits[i].ip) };
+        char dotted[INET_ADDRSTRLEN];
+        inet_ntop(AF_INET, &a, dotted, sizeof(dotted));
+        if (hits[i].port == 443) snprintf(urls[out++], 64, "https://%s", dotted);
+        else if (hits[i].port == 80) snprintf(urls[out++], 64, "http://%s", dotted);
+        else snprintf(urls[out++], 64, "http://%s:%u", dotted, (unsigned) hits[i].port);
+    }
+    return out;
+}
+
 static bool dw_discover(dw_ctx_t * x, discworld_result_t * r) {
     char candidates[8][160];
     int n = 0;
@@ -1226,6 +1335,20 @@ static bool dw_discover(dw_ctx_t * x, discworld_result_t * r) {
             if (used >= sizeof(r->detail)) used = sizeof(r->detail) - 1;
         }
     }
+    /* Then anything on the home network that answers like Discworld. */
+    char found[DW_SCAN_MAX_FOUND][64];
+    int nf = dw_stopping(x) ? 0 : dw_scan_network(x, found, DW_SCAN_MAX_FOUND);
+    for (int i = 0; i < nf && !dw_stopping(x); i++) {
+        char why[120];
+        if (dw_probe(x, found[i], why, sizeof(why))) {
+            snprintf(r->found_url, sizeof(r->found_url), "%s", found[i]);
+            return true;
+        }
+    }
+    if (used < sizeof(r->detail) - 1)
+        snprintf(r->detail + used, sizeof(r->detail) - used,
+                 nf ? "\nSearched the home network: %d web servers, none of them Discworld"
+                    : "\nSearched the home network: no web servers answered", nf);
     return false;
 }
 
