@@ -4,9 +4,14 @@
 #include <stdbool.h>
 #include "lvgl/lvgl.h"
 
-/* Home's Favorites tile: a list of the playlists in the SD card's
- * Playlists/Favorites (or Playlists/Favourites) folder, falling back to every
- * playlist in Playlists when that folder has none. Rows are large for use
+/* Home's Favorites tile. With people set (Settings favorites_people, "Rachel,
+ * Phoebe, Amelie"), a large button for each opens that person's playlists,
+ * from Playlists/Favourites/<name> (Discworld sync writes them there); any
+ * playlists straight in Playlists/Favourites (or Favorites) follow the
+ * buttons. With nobody set, those playlists, falling back to every playlist
+ * in Playlists when that folder has none. Each playlist shows a cover: a
+ * picture of the same name beside it (.jpg/.png), else its first song's
+ * album cover. Rows are large for use
  * while driving. A tap plays the list from where it was last left; a long
  * press plays it from the start. Each list's place is saved as it plays
  * (library/playlists/list_positions.h). */
