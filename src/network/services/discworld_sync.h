@@ -24,10 +24,10 @@
  * file that replaces the real one only once complete, and the record is
  * saved every 100 files, so a sync cut short (Wi-Fi gone, charger pulled,
  * Stop) carries on from where it got to next time. Playlists go to
- * <card>/Playlists, where compás reads them (the USB page writes
- * playlist_data/ for HiBy's own OS); compas_playlists lists the ones this
- * wrote, and a playlist of the user's own with the same name is never
- * replaced.
+ * <card>/Playlists/Favourites, where compás and its Home Favourites tile read
+ * them (the USB page writes playlist_data/ for HiBy's own OS);
+ * compas_playlists lists the ones this wrote, relative to Playlists/, and a
+ * playlist of the user's own with the same name is never replaced.
  *
  * Worker-thread only: everything here blocks. No UI code. */
 
@@ -39,6 +39,9 @@
 
 #define DISCWORLD_RECORD_NAME ".discworld-sync.json"
 #define DISCWORLD_PLAYLISTS_DIR "Playlists"
+/* Inside Playlists/: the Home Favourites tile reads either spelling. */
+#define DISCWORLD_FAVOURITES_DIR "Favourites"
+#define DISCWORLD_FAVORITES_DIR "Favorites"
 
 typedef struct {
     char base_url[256];   /* "http://jarvis.local:8080", no trailing slash */
