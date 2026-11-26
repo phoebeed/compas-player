@@ -520,6 +520,17 @@ CFLAGS += -I$(WAVPACK_DIR)/include -I$(SNDFILE_DIR)/include
 CXXFLAGS = $(filter-out -Wall,$(CFLAGS)) -std=c++11
 HOST_CFLAGS = $(CFLAGS) -DHOST_BUILD=1 $(BOARD_DEFINE) $(UI_PERF_TRACE_DEFINE) $(shell sdl2-config --cflags) -I$(TINFL_DIR) -DMINIZ_NO_DEFLATE_APIS -DMINIZ_NO_ARCHIVE_APIS
 HOST_CXXFLAGS = $(CXXFLAGS) -DHOST_BUILD=1 $(BOARD_DEFINE) $(UI_PERF_TRACE_DEFINE) $(shell sdl2-config --cflags) -I$(TINFL_DIR) -DMINIZ_NO_DEFLATE_APIS -DMINIZ_NO_ARCHIVE_APIS
+# macOS simulator: `make host` on a Mac. The code is written for Linux;
+# src/host/macos/ fills the gaps (stand-in headers for Linux-only includes,
+# and macos_compat.h, force-included into every host file). None of it
+# reaches the device build or the Linux simulator.
+HOST_UNAME := $(shell uname -s)
+ifeq ($(HOST_UNAME),Darwin)
+HOST_MACOS_CFLAGS = -D_DARWIN_C_SOURCE -Isrc/host/macos/include -include src/host/macos/macos_compat.h -I$(shell sdl2-config --prefix)/include
+HOST_CFLAGS += $(HOST_MACOS_CFLAGS)
+HOST_CXXFLAGS += $(HOST_MACOS_CFLAGS)
+HOST_MACOS_SRCS = src/host/macos/macos_compat.c
+endif
 # Optional: `make target TEST_BUILD_TAG=test25_avrcp` -- replaces the release
 # label in About with a conspicuous test-build identity, so a binary running
 # on the device can be identified without checking timestamps or hashes.
@@ -945,7 +956,11 @@ TARGET_ONLY_APP_SRCS += src/core/math/fast_lrintf.c
 LIBEXECINFO_SRCS = $(LIBEXECINFO_DIR)/execinfo.c $(LIBEXECINFO_DIR)/stacktraverse.c
 
 # Object files
-HOST_OBJS = $(BUILD_HOST_DIR)/sonic/sonic.o $(APP_SRCS:src/%.c=$(BUILD_HOST_DIR)/%.o) $(APP_CXX_SRCS:src/%.cpp=$(BUILD_HOST_DIR)/%.o) \
+# The simulator fakes Wi-Fi (src/host/sim_wifi.c) instead of driving
+# wpa_supplicant and udhcpc; the computer's own network carries the traffic.
+HOST_SIM_WIFI_REPLACES = src/network/wifi/wifi_control.c src/network/wifi/wifi_status.c src/network/wifi/wifi_dhcp.c
+HOST_APP_SRCS = $(filter-out $(HOST_SIM_WIFI_REPLACES),$(APP_SRCS)) src/host/sim_wifi.c
+HOST_OBJS = $(BUILD_HOST_DIR)/sonic/sonic.o $(HOST_APP_SRCS:src/%.c=$(BUILD_HOST_DIR)/%.o) $(HOST_MACOS_SRCS:src/%.c=$(BUILD_HOST_DIR)/%.o) $(APP_CXX_SRCS:src/%.cpp=$(BUILD_HOST_DIR)/%.o) \
             $(LVGL_SRCS:$(LVGL_DIR)/%.c=$(BUILD_HOST_DIR)/lvgl/%.o) $(LV_XML_SRCS:$(LV_XML_DIR)/%.c=$(BUILD_HOST_DIR)/lv_xml/%.o) $(FAAD2_SRCS:$(FAAD2_DIR)/libfaad/%.c=$(BUILD_HOST_DIR)/faad2/%.o) \
             $(ALAC_C_SRCS:$(ALAC_DIR)/codec/%.c=$(BUILD_HOST_DIR)/alac/%.o) $(ALAC_CXX_SRCS:$(ALAC_DIR)/codec/%.cpp=$(BUILD_HOST_DIR)/alac/%.o) \
             $(MBEDTLS_SRCS:$(MBEDTLS_DIR)/library/%.c=$(BUILD_HOST_DIR)/mbedtls/%.o) $(CJSON_SRCS:$(CJSON_DIR)/%.c=$(BUILD_HOST_DIR)/cjson/%.o) \
