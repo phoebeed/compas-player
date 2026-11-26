@@ -101,6 +101,12 @@ bool subprocess_popen(char * const argv[], pid_t * out_pid, int * out_read_fd);
  * false (nothing to clean up) if the fork/pipe setup itself failed. */
 bool subprocess_popen_stdin(char * const argv[], pid_t * out_pid, int * out_write_fd);
 
+/* Like subprocess_popen_stdin(), but the child's stderr is a pipe too: the
+ * caller reads it from *out_err_fd (non-blocking, close-on-exec) and closes
+ * it. Used to see aplay's underrun warnings. */
+bool subprocess_popen_stdin_stderr(char * const argv[], pid_t * out_pid, int * out_write_fd,
+                                   int * out_err_fd);
+
 /* Stops a child started by subprocess_popen()/subprocess_popen_stdin():
  * SIGTERM, a brief grace period polled via WNOHANG, then SIGKILL if it's
  * still alive -- and reaps it either way, so callers never need their own
