@@ -74,6 +74,7 @@ bool idle_shutdown_reboot_handoff(void) {
 #include "../../../ui/network/gui_network.h"
 #include "../../../ui/text/i18n/i18n.h"
 #include "../../../ui/library/favorites/gui_favorites.h"
+#include "../../../ui/library/audiobooks/gui_audiobooks.h"
 #include <pthread.h>
 #include <stdatomic.h>
 #include <time.h>
@@ -174,6 +175,7 @@ static bool shutdown_request(int action) {
     if (audio_is_playing() || audio_is_paused())
         current_settings.last_position = audio_get_resume_position_seconds();
     gui_favorites_checkpoint();
+    gui_audiobooks_checkpoint();
     shutdown_work.running = shutdown_work.notified = shutdown_work.settings_started = false;
     shutdown_work.action = action;
     shutdown_work.error[0] = 0;

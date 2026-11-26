@@ -10,6 +10,8 @@
 #include "../library/collections/gui_books.h"
 #include "../library/favorites/gui_favorites.h"
 #include "favorites_icon.h"
+#include "audiobooks_icon.h"
+#include "../library/audiobooks/gui_audiobooks.h"
 #include "../network/subsonic/gui_subsonic.h"
 #include "../../plugins/manager/plugin_manager.h"
 #include "../text/i18n/i18n.h"
@@ -22,7 +24,10 @@
  * validates a Lua `key` string against this same array rather than keeping
  * its own copy that could drift out of sync. */
 const char * const home_layout_tile_keys[HOME_LAYOUT_TILE_COUNT] = {
-    "music", "stream_media", "wireless", "books", "settings", "dac", "favorites", "subsonic",
+    "music", "audiobooks", "stream_media", "books", "settings", "dac", "favorites", "subsonic",
+    /* Not on the native Home any more (it is under More), but a theme's
+     * order can still name it. */
+    "wireless",
 };
 
 /* Native per-tile metadata, same fixed order as home_layout_tile_keys[]
@@ -229,14 +234,16 @@ static void fit_home_list_rows(icon_grid_item_t * items, const resolved_home_til
 lv_obj_t * gui_home_build_screen(lv_event_cb_t settings_cb, lv_event_cb_t stream_media_cb) {
     const home_native_tile_t native_tiles[HOME_LAYOUT_TILE_COUNT] = {
         { "launcher/music.png", "launcher/music_s.png", N_("Music"), music_tile_cb },
+        /* List mode uses the stock books icon; the tile grid draws audiobooks_icon. */
+        { "launcher/book.png", "launcher/book_s.png", N_("Audiobooks"), gui_audiobooks_home_tile_cb },
         { "launcher/stream_media.png", "launcher/stream_media_s.png", N_("Stream Media"), stream_media_cb },
-        { "launcher/wireless.png", "launcher/wireless_s.png", N_("Wireless"), wireless_tile_cb },
         { "launcher/book.png", "launcher/book_s.png", N_("Books"), gui_books_home_tile_cb },
         { "launcher/sys_set.png", "launcher/sys_set_s.png", N_("Settings"), settings_cb },
         { "launcher/dac.png", "launcher/dac_s.png", N_("More"), dac_home_tile_cb },
         /* List mode uses the stock heart; the tile grid draws favorites_icon. */
         { "playing_plane/collect_in.png", NULL, N_("Favorites"), gui_favorites_home_tile_cb },
         { "stream_media/subsonic.png", "stream_media/subsonic_s.png", N_("Subsonic"), subsonic_tile_cb },
+        { "launcher/wireless.png", "launcher/wireless_s.png", N_("Wireless"), wireless_tile_cb },
     };
     static resolved_home_tile_t resolved[HOME_LAYOUT_MAX_TILES];
     int count = resolve_home_tiles(resolved, native_tiles);
@@ -325,6 +332,8 @@ lv_obj_t * gui_home_build_screen(lv_event_cb_t settings_cb, lv_event_cb_t stream
         if (resolved[i].on_click == gui_favorites_home_tile_cb) {
             items[i].icon_src = &favorites_icon;
             items[i].span_row = true; /* the odd seventh tile fills the bottom row */
+        } else if (resolved[i].on_click == gui_audiobooks_home_tile_cb) {
+            items[i].icon_src = &audiobooks_icon;
         }
     }
     /* No back_btn_cb -- this is the true root, nothing to go back to. No

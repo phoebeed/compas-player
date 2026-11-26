@@ -11,7 +11,7 @@
  * plain struct passed across the plugin_ui_bindings.c/gui.c-family boundary,
  * like remote_track_meta_t is for plugin.play_remote().
  *
- * Home has 8 addressable native tiles, published as home_layout_tile_keys[]
+ * Home has 9 addressable native tiles, published as home_layout_tile_keys[]
  * (defined in gui_home.c, the file that owns their native order) so
  * plugin_ui_bindings.c
  * can validate a Lua `key` string against it without a second, potentially-
@@ -19,7 +19,7 @@
  * tile (plugin.register_home_tile(), PLUGINS.md) and a theme can reorder,
  * drop, or interleave any of these via set_home_layout()'s `options.order`
  * -- see home_layout_config_t's own comment below. */
-#define HOME_LAYOUT_TILE_COUNT 8
+#define HOME_LAYOUT_TILE_COUNT 9
 /* The first N keys form the native Home. The small V1 screen keeps its six
  * tiles; the 480x800 boards add Favorites as a seventh, full-width tile. */
 #if defined(BOARD_TEMPOTEC_V1)
@@ -98,7 +98,7 @@ typedef struct {
     char background_image[64];
 
     /* Display order -- position IS order, unlike tiles[] below. Each entry
-     * is either one of the 8 native keys in home_layout_tile_keys[] or a
+     * is either one of the 9 native keys in home_layout_tile_keys[] or a
      * plugin.register_home_tile() id. A native key simply not mentioned
      * here is not shown at all -- this is how a theme drops a tile, not
      * just reorders one. An entry that resolves to neither a native key nor

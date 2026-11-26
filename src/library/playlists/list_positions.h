@@ -7,11 +7,12 @@
 /* Where each favourite playlist was last left: the track (by index and
  * path, so an edited playlist still finds it) and the seconds into it.
  * Kept in INTERNAL_COMPAS_DIR, separate from settings.txt, most recently
- * used first, capped at LIST_POSITIONS_MAX lists. No LVGL dependency.
+ * used first, capped at LIST_POSITIONS_MAX lists. Audiobooks keep their
+ * places here too, keyed by each book's first file. No LVGL dependency.
  *
  * track_index -1 means the list was played to its end: the next start
  * begins at the first track again. */
-#define LIST_POSITIONS_MAX 32
+#define LIST_POSITIONS_MAX 128
 #define LIST_POSITIONS_PATH_MAX 512
 
 typedef struct {
