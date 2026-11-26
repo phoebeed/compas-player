@@ -472,7 +472,8 @@ static void dw_populate(void) {
     add_pill_chevron_row(dw_list, label, dw_profile_row_cb);
     add_network_explanation(dw_list,
         TR("Copies Discworld's Music folder to Music on the SD card, the same way its Sync with HiBy page "
-           "does over USB, and your playlists to Playlists. Files you put on the card yourself are never touched."));
+           "does over USB, and your playlists to Playlists/Favourites, so they show under Favourites on Home. "
+           "Files you put on the card yourself are never touched."));
     lv_obj_scroll_to_y(dw_list, scroll_y, LV_ANIM_OFF);
 }
 
