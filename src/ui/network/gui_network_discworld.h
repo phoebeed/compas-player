@@ -11,6 +11,8 @@
 void gui_network_discworld_build(void);
 void gui_network_discworld_teardown(void);
 void gui_network_discworld_row_cb(lv_event_t * e);
+/* "Discworld sync now" in the Music menu: starts a sync and shows its progress. */
+void gui_network_discworld_sync_now_cb(lv_event_t * e);
 /* UI thread, from the housekeeping poll: reaps a finished sync, refreshes
  * the screen, and starts an automatic one when it is due. */
 void gui_network_discworld_poll(void);
