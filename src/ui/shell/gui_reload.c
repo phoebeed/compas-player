@@ -118,6 +118,7 @@
 #include "../appearance/gui_themes.h"
 #include "../../network/store/plugins/plugin_store.h"
 #include "../../core/system/logging/db_log.h"
+#include "../library/favorites/gui_favorites.h"
 
 /* The optional cover flow module: absent when src/ui/widgets/cover_flow is removed. */
 extern void cover_flow_shutdown(void) __attribute__((weak));
@@ -186,6 +187,8 @@ static void gui_soft_reload_with_artwork(bool preserve_artwork,
     gui_file_manager_teardown();
     reload_diag("gui_books_teardown: before");
     gui_books_teardown();
+    reload_diag("gui_favorites_teardown: before");
+    gui_favorites_teardown();
     reload_diag("gui_emulators_teardown: before");
     gui_emulators_teardown();
     reload_diag("gui_emulator_store_teardown: before");
@@ -252,6 +255,8 @@ static void gui_soft_reload_with_artwork(bool preserve_artwork,
     gui_lock_screen_init();
     reload_diag("gui_books_init: before");
     gui_books_init();
+    reload_diag("gui_favorites_init: before");
+    gui_favorites_init();
     reload_diag("build_power_off_countdown_popup: before");
     build_power_off_countdown_popup();
     reload_diag("gui_queue_init: before");

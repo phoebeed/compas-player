@@ -28,6 +28,7 @@
 #include <string.h>
 #include "gui_internal.h"
 #include "../network/gui_network_discworld.h"
+#include "../library/favorites/gui_favorites.h"
 
 #ifdef UI_PERF_TRACE
 #include "../diagnostics/ui_frame_trace.h"
@@ -273,6 +274,7 @@ static void poll_storage_jobs(void) {
     PERF_MARK("sd_hotplug");
     poll_usb_drive_hotplug();
     gui_library_poll_playlists();
+    gui_favorites_poll();
     gui_library_poll_track_probes();
     PERF_MARK("storage_jobs");
 }
