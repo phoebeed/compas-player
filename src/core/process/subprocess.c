@@ -256,6 +256,10 @@ bool subprocess_spawn_daemon(char * const argv[]) {
 }
 
 bool subprocess_spawn_daemon_logged(char * const argv[], const char * log_path) {
+    return subprocess_spawn_daemon_nice(argv, log_path, 0);
+}
+
+bool subprocess_spawn_daemon_nice(char * const argv[], const char * log_path, int child_nice) {
     pid_t pid = fork();
     if (pid < 0) return false;
 
@@ -267,6 +271,8 @@ bool subprocess_spawn_daemon_logged(char * const argv[], const char * log_path) 
         pid_t pid2 = fork();
         if (pid2 == 0) {
             setsid();
+            /* Before exec, so every thread the daemon starts inherits it. */
+            if (child_nice != 0) (void) setpriority(PRIO_PROCESS, 0, child_nice);
             int devnull_in = open("/dev/null", O_RDONLY);
             if (devnull_in >= 0) {
                 dup2(devnull_in, STDIN_FILENO);

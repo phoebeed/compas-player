@@ -75,6 +75,11 @@ bool subprocess_spawn_daemon(char * const argv[]);
  * this behaves exactly like subprocess_spawn_daemon(). */
 bool subprocess_spawn_daemon_logged(char * const argv[], const char * log_path);
 
+/* Like subprocess_spawn_daemon_logged(), but the daemon starts at nice
+ * child_nice (0 leaves the caller's own). Set before exec, so the threads the
+ * daemon creates later inherit it too. */
+bool subprocess_spawn_daemon_nice(char * const argv[], const char * log_path, int child_nice);
+
 /* For a long-running child whose stdout the caller wants to read
  * continuously as it's produced (e.g. `bluealsactl monitor`, which streams
  * D-Bus property-change lines indefinitely rather than exiting) -- unlike
