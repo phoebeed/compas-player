@@ -93,7 +93,7 @@ typedef struct {
     int left;                /* files still to copy when the sync stopped early */
     uint64_t bytes;          /* bytes downloaded */
     bool changed;            /* anything on the card changed: rescan the library */
-    char detail[1024];        /* safe diagnostic; never holds the password or cookie. After a
+    char detail[1600];        /* safe diagnostic; never holds the password or cookie. After a
                               * failed search, one line for each address tried. */
     char found_url[160];     /* the set address did not answer and Discworld was found here
                               * (and synced with): the caller saves it. Empty otherwise. */

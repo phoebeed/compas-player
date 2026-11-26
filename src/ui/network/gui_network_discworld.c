@@ -60,7 +60,7 @@ static atomic_bool dw_unplugged;  /* the charger was pulled with "only while cha
 static lv_obj_t * dw_screen;
 static lv_obj_t * dw_list;
 static lv_obj_t * dw_status_label;
-static char dw_last_summary[1280];  /* what the last sync did, shown under the rows */
+static char dw_last_summary[2000];  /* what the last sync did, shown under the rows */
 static uint32_t dw_last_auto_check;
 static time_t dw_auto_retry_after;
 
@@ -242,7 +242,7 @@ static void dw_status_text(char * out, size_t size) {
 
 static void dw_refresh_status(void) {
     if (!dw_status_label) return;
-    char text[1280];
+    char text[2000];
     dw_status_text(text, sizeof(text));
     if (strcmp(lv_label_get_text(dw_status_label), text) != 0) lv_label_set_text(dw_status_label, text);
 }
