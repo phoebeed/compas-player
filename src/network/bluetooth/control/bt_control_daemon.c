@@ -450,7 +450,7 @@ bool ensure_bluealsa_running_rate_ex(unsigned int requested_rate, bool * out_def
     argv[argc] = NULL;
     /* A fresh daemon has no PCMs, and a dead one may not have reported their removal. */
     bluealsa_clear_soft_volume_path(NULL);
-    bool ok = subprocess_spawn_daemon_nice(argv, NULL, BLUEALSA_DAEMON_NICE);
+    bool ok = subprocess_spawn_daemon(argv);
     pthread_mutex_unlock(&bt_daemon_respawn_mutex);
     return ok;
 }
@@ -597,10 +597,9 @@ static bool spawn_bluealsa_and_verify(char * const argv[]) {
 #if defined(TEST_BUILD_TAG)
     /* Settings are loaded before bluealsa is first spawned, so
      * db_log_enabled() is authoritative; off means no log file. */
-    return subprocess_spawn_daemon_nice(argv, db_log_enabled() ? BLUEALSA_STARTUP_LOG_PATH : NULL,
-                                        BLUEALSA_DAEMON_NICE);
+    return subprocess_spawn_daemon_logged(argv, db_log_enabled() ? BLUEALSA_STARTUP_LOG_PATH : NULL);
 #else
-    return subprocess_spawn_daemon_nice(argv, NULL, BLUEALSA_DAEMON_NICE);
+    return subprocess_spawn_daemon_logged(argv, NULL);
 #endif
 }
 

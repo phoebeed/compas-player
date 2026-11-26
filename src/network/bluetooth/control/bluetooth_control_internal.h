@@ -53,12 +53,6 @@ typedef enum {
  * client names centralized so every path uses the same current API. */
 #define BLUEALSA_DAEMON_PATH "/usr/bin/bluealsad"
 #define BLUEALSA_DAEMON_NAME "bluealsad"
-/* bluealsad encodes A2DP (SBC/AAC/LDAC...) on its own threads, after aplay
- * hands it PCM. At nice 0 it shared the single core evenly with the UI thread
- * and library workers, so a busy screen could starve the encoder long enough
- * for the accessory to run dry (audible stutter, worst with AAC). Same level
- * aplay already runs at, still below the real-time audio thread. */
-#define BLUEALSA_DAEMON_NICE (-15)
 #define BLUEALSA_CTL "/usr/bin/bluealsactl"
 
 #define BT_SSC_AUTO_PROFILE_ARG "--ssc-auto-profile"

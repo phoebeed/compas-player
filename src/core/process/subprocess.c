@@ -70,7 +70,7 @@ int subprocess_close_inherited_fds_action(posix_spawn_file_actions_t * fa) {
 #define SUBPROCESS_STDIN_DEVNULL (-2)
 
 /* Common spawn path: stdin comes from stdin_fd (or is inherited / /dev/null),
- * stdout from stdout_fd and stderr from stderr_fd (-1 = /dev/null), then
+ * stdout from stdout_fd (-1 = /dev/null), stderr is always /dev/null, then
  * every other inheritable fd is closed. The pipe fds passed in should be
  * O_CLOEXEC so the dup2 copies are the only ones the child keeps. posix_spawnp() searches PATH exactly
  * like the execvp() the fork versions used, with the same environ.
@@ -79,8 +79,7 @@ int subprocess_close_inherited_fds_action(posix_spawn_file_actions_t * fa) {
  * copy the 20 MiB player address space, which on this 56 MiB no-swap device
  * both spikes memory and costs page-table copying on a slow CPU. Returns 0
  * or an errno value; on failure *pid is not valid. */
-static int subprocess_spawn_ex(char * const argv[], int stdin_fd, int stdout_fd, int stderr_fd,
-                               pid_t * pid, bool process_group) {
+static int subprocess_spawn(char * const argv[], int stdin_fd, int stdout_fd, pid_t * pid, bool process_group) {
     posix_spawn_file_actions_t fa;
     int rc = posix_spawn_file_actions_init(&fa);
     if (rc != 0) return rc;
@@ -92,10 +91,7 @@ static int subprocess_spawn_ex(char * const argv[], int stdin_fd, int stdout_fd,
         if (stdout_fd >= 0) rc = posix_spawn_file_actions_adddup2(&fa, stdout_fd, STDOUT_FILENO);
         else rc = posix_spawn_file_actions_addopen(&fa, STDOUT_FILENO, "/dev/null", O_WRONLY, 0);
     }
-    if (rc == 0) {
-        if (stderr_fd >= 0) rc = posix_spawn_file_actions_adddup2(&fa, stderr_fd, STDERR_FILENO);
-        else rc = posix_spawn_file_actions_addopen(&fa, STDERR_FILENO, "/dev/null", O_WRONLY, 0);
-    }
+    if (rc == 0) rc = posix_spawn_file_actions_addopen(&fa, STDERR_FILENO, "/dev/null", O_WRONLY, 0);
     if (rc == 0) rc = subprocess_close_inherited_fds_action(&fa);
     posix_spawnattr_t attrs;
     bool attrs_ready = false;
@@ -109,10 +105,6 @@ static int subprocess_spawn_ex(char * const argv[], int stdin_fd, int stdout_fd,
     if (attrs_ready) posix_spawnattr_destroy(&attrs);
     posix_spawn_file_actions_destroy(&fa);
     return rc;
-}
-
-static int subprocess_spawn(char * const argv[], int stdin_fd, int stdout_fd, pid_t * pid, bool process_group) {
-    return subprocess_spawn_ex(argv, stdin_fd, stdout_fd, -1, pid, process_group);
 }
 
 /* Default subprocess execution timeout (15s) to ensure hung commands do not block the UI.
@@ -264,10 +256,6 @@ bool subprocess_spawn_daemon(char * const argv[]) {
 }
 
 bool subprocess_spawn_daemon_logged(char * const argv[], const char * log_path) {
-    return subprocess_spawn_daemon_nice(argv, log_path, 0);
-}
-
-bool subprocess_spawn_daemon_nice(char * const argv[], const char * log_path, int child_nice) {
     pid_t pid = fork();
     if (pid < 0) return false;
 
@@ -279,8 +267,6 @@ bool subprocess_spawn_daemon_nice(char * const argv[], const char * log_path, in
         pid_t pid2 = fork();
         if (pid2 == 0) {
             setsid();
-            /* Before exec, so every thread the daemon starts inherits it. */
-            if (child_nice != 0) (void) setpriority(PRIO_PROCESS, 0, child_nice);
             int devnull_in = open("/dev/null", O_RDONLY);
             if (devnull_in >= 0) {
                 dup2(devnull_in, STDIN_FILENO);
@@ -347,30 +333,6 @@ bool subprocess_popen_stdin(char * const argv[], pid_t * out_pid, int * out_writ
     close(pipefd[0]);
     *out_pid = pid;
     *out_write_fd = pipefd[1];
-    return true;
-}
-
-bool subprocess_popen_stdin_stderr(char * const argv[], pid_t * out_pid, int * out_write_fd,
-                                   int * out_err_fd) {
-    int in_pipe[2], err_pipe[2];
-    if (pipe2(in_pipe, O_CLOEXEC) != 0) return false;
-    if (pipe2(err_pipe, O_CLOEXEC | O_NONBLOCK) != 0) {
-        close(in_pipe[0]);
-        close(in_pipe[1]);
-        return false;
-    }
-    pid_t pid;
-    int spawn_rc = subprocess_spawn_ex(argv, in_pipe[0], -1, err_pipe[1], &pid, false);
-    close(in_pipe[0]);
-    close(err_pipe[1]);
-    if (spawn_rc != 0) {
-        close(in_pipe[1]);
-        close(err_pipe[0]);
-        return false;
-    }
-    *out_pid = pid;
-    *out_write_fd = in_pipe[1];
-    *out_err_fd = err_pipe[0];
     return true;
 }
 

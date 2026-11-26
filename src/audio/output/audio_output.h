@@ -180,18 +180,6 @@ void audio_output_reset_s24_probe(void);
  * a non-owner thread is a no-op. */
 void audio_output_close(void);
 
-/* Plays out what is still buffered (ALSA ring, or the aplay pipe and
- * aplay's own buffer) instead of dropping it when the device closes. For
- * a natural end of playback only: a stop, skip or seek cuts on purpose.
- * Blocks the caller for at most about the buffered duration (bounded at
- * 1.5 s for aplay). Owner thread only. */
-void audio_output_drain(void);
-
-/* While on, an audio_output_ensure*() call that has to reopen a device that
- * stays on the same route drains it first (audio_output_drain()). Set around
- * a gapless handoff to a track of another format, then turned off again. */
-void audio_output_set_drain_on_reopen(bool on);
-
 /* Routes subsequent audio_output_ensure()/_write() calls to a connected
  * Bluetooth accessory instead of local hardware. Takes effect on the next
  * audio_output_ensure() call. */

@@ -669,9 +669,7 @@ static void populate_bt_advanced_screen(void);
  * the rows now but the callbacks stay next to the state they touch. */
 static void bt_volume_sync_toggle_cb(lv_event_t * e);
 static void bt_hide_unnamed_toggle_cb(lv_event_t * e);
-static void bt_send_cover_art_toggle_cb(lv_event_t * e);
 static void bt_restore_at_startup_toggle_cb(lv_event_t * e);
-static void bt_resume_on_reconnect_toggle_cb(lv_event_t * e);
 static void bt_codec_settings_row_cb(lv_event_t * e);
 
 /* Cycling the accessory's link blocks for seconds, so it runs on a worker
@@ -838,18 +836,10 @@ static void populate_bt_advanced_screen(void) {
      * the resampler at all. */
     add_pill_toggle_row(bt_advanced_list, TR("Speex resampling"),
                         current_settings.bt_speexrate_enabled, bt_speexrate_toggle_cb);
-    /* Cars that do not understand AVRCP cover art can lose the title when
-     * an image handle is sent; turning this off sends no artwork. */
-    add_pill_toggle_row(bt_advanced_list, TR("Send cover art"),
-                        current_settings.bt_send_cover_art, bt_send_cover_art_toggle_cb);
     add_pill_toggle_row(bt_advanced_list, TR("Hide unnamed devices"),
                         current_settings.bt_hide_unnamed_devices, bt_hide_unnamed_toggle_cb);
     add_pill_toggle_row(bt_advanced_list, TR("Restore at startup"),
                         current_settings.bt_restore_at_startup, bt_restore_at_startup_toggle_cb);
-    /* Picks up playback a Bluetooth disconnect paused, e.g. when the car
-     * is switched off and on again (see poll_output_connection()). */
-    add_pill_toggle_row(bt_advanced_list, TR("Resume when reconnected"),
-                        current_settings.bt_resume_on_reconnect, bt_resume_on_reconnect_toggle_cb);
 }
 
 static void bt_advanced_settings_row_cb(lv_event_t * e) {
@@ -882,29 +872,11 @@ static void bt_hide_unnamed_toggle_cb(lv_event_t * e) {
     populate_bt_screen();          /* and the device list it filters, for the way back */
 }
 
-/* Takes effect on the next GUI tick: gui_external_controls stops (or
- * resumes) passing the cover art URL, which changes the metadata BlueZ
- * hands the car. */
-static void bt_send_cover_art_toggle_cb(lv_event_t * e) {
-    if (lv_event_get_code(e) != LV_EVENT_CLICKED) return;
-    current_settings.bt_send_cover_art = !current_settings.bt_send_cover_art;
-    settings_save_async(&current_settings);
-    populate_bt_advanced_screen();
-}
-
 static void bt_restore_at_startup_toggle_cb(lv_event_t * e) {
     if (lv_event_get_code(e) != LV_EVENT_CLICKED) return;
     current_settings.bt_restore_at_startup = !current_settings.bt_restore_at_startup;
     if (current_settings.bt_restore_at_startup)
         current_settings.bt_last_on = bt_is_powered_cached;
-    settings_save_async(&current_settings);
-    populate_bt_advanced_screen();
-}
-
-/* Read on the next control tick; turning it off also drops a pending resume. */
-static void bt_resume_on_reconnect_toggle_cb(lv_event_t * e) {
-    if (lv_event_get_code(e) != LV_EVENT_CLICKED) return;
-    current_settings.bt_resume_on_reconnect = !current_settings.bt_resume_on_reconnect;
     settings_save_async(&current_settings);
     populate_bt_advanced_screen();
 }

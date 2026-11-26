@@ -40,10 +40,8 @@ static void poll_bluetooth_controls(void) {
     bt_media_player_notify_playback_state(audio_is_playing());
     bool has_track = gui_player_has_active_track();
     char bt_art_url[256] = "";
-    /* With cover art off the URL stays empty, so the next metadata update
-     * drops the image handle from what the car is sent. */
-    if (!has_track) bt_cover_art_begin_track(NULL);
-    else if (current_settings.bt_send_cover_art) bt_cover_art_get_url(bt_art_url, sizeof(bt_art_url));
+    if (has_track) bt_cover_art_get_url(bt_art_url, sizeof(bt_art_url));
+    else bt_cover_art_begin_track(NULL);
     bt_media_player_notify_track(has_track ? gui_player_get_now_playing_title() : "",
                                  has_track ? gui_player_get_now_playing_artist() : "",
                                  has_track ? gui_player_get_now_playing_album() : "",

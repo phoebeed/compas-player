@@ -645,11 +645,6 @@ static void * dispatch_thread_func(void * arg) {
             send_playback_status_changed();
             track_snapshot_t status_track = snapshot_copy();
             send_track_changed(false, true, &status_track);
-#ifndef BOARD_R3PROII
-            /* The legacy bridge only heard a position with new metadata, so
-             * after a pause its elapsed time ran on from the wrong place. */
-            hiby_sys_server_report_position(seconds_to_milliseconds(status_track.position_seconds));
-#endif
             hiby_sys_server_report_playback_status(current_playing);
             last_notified_playing = current_playing;
         }
@@ -687,12 +682,6 @@ static void * dispatch_thread_func(void * arg) {
                     initial_metadata_pending = false;
                 }
             }
-#ifndef BOARD_R3PROII
-            else {
-                /* A seek: the legacy bridge needs the new position too. */
-                hiby_sys_server_report_position(seconds_to_milliseconds(current.position_seconds));
-            }
-#endif
         }
         last_position = current.position_seconds;
         previous_playing = current_playing;
