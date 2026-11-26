@@ -1304,6 +1304,19 @@ static int dw_scan_network(dw_ctx_t * x, char urls[][64], int max, char * self_o
     if (self_out) inet_ntop(AF_INET, &me, self_out, (socklen_t) self_size);
     if (~mask + 1U > DW_SCAN_MAX_HOSTS || mask == 0) mask = 0xFFFFFF00U; /* a big network: its /24 */
     uint32_t net = self & mask, count = ~mask + 1U;
+    /* Have the kernel look up every address's hardware address first (one
+     * small packet to the discard port each), so the connections below are
+     * not lost waiting for many lookups at once on a sleepy Wi-Fi. */
+    int u = socket(AF_INET, SOCK_DGRAM | SOCK_NONBLOCK | SOCK_CLOEXEC, 0);
+    if (u >= 0) {
+        for (uint32_t h = 1; h + 1 < count; h++) {
+            struct sockaddr_in a = { .sin_family = AF_INET, .sin_port = htons(9), .sin_addr.s_addr = htonl(net + h) };
+            if (net + h != self) (void) sendto(u, "", 0, 0, (struct sockaddr *) &a, sizeof(a));
+            if ((h & 31) == 0) usleep(20000);
+        }
+        close(u);
+        usleep(1200000);
+    }
     static const uint16_t scan_ports[] = { 443, 8080, 80 };
     dw_hit_t hits[DW_SCAN_MAX_FOUND];
     int nhits = 0;
@@ -1350,6 +1363,102 @@ static void dw_add(discworld_result_t * r, size_t * used, const char * fmt, ...)
     va_end(ap);
     if (w > 0) *used += (size_t) w;
     if (*used >= sizeof(r->detail)) *used = sizeof(r->detail) - 1;
+}
+
+/* ---- why an address cannot be reached ------------------------------------------------------
+ * For the failure list: which of the player's interfaces the address goes out
+ * of, what the player knows of its hardware address, and what a bare TCP
+ * connection to 443 and 80 gets, with the system's own error. */
+static void dw_connect_test(uint32_t ip, uint16_t port, char * out, size_t size) {
+    int fd = socket(AF_INET, SOCK_STREAM | SOCK_NONBLOCK | SOCK_CLOEXEC, 0);
+    if (fd < 0) { snprintf(out, size, "no socket (%s)", strerror(errno)); return; }
+    struct sockaddr_in a = { .sin_family = AF_INET, .sin_port = htons(port), .sin_addr.s_addr = htonl(ip) };
+    uint64_t start = dw_ms();
+    int rc = connect(fd, (struct sockaddr *) &a, sizeof(a));
+    if (rc != 0 && errno != EINPROGRESS) {
+        snprintf(out, size, "%s", strerror(errno));
+        close(fd);
+        return;
+    }
+    struct pollfd p = { .fd = fd, .events = POLLOUT };
+    int ready = rc == 0 ? 1 : poll(&p, 1, 4000);
+    int err = 0;
+    socklen_t len = sizeof(err);
+    if (ready <= 0) snprintf(out, size, "no reply in 4 s");
+    else if (getsockopt(fd, SOL_SOCKET, SO_ERROR, &err, &len) != 0 || err) snprintf(out, size, "%s", strerror(err ? err : errno));
+    else snprintf(out, size, "connects (%u ms)", (unsigned) (dw_ms() - start));
+    close(fd);
+}
+
+static void dw_check_address(discworld_result_t * r, size_t * used, const char * dotted) {
+    struct in_addr ia;
+    if (inet_pton(AF_INET, dotted, &ia) != 1) return;
+    uint32_t ip = ntohl(ia.s_addr);
+    /* The player's addresses. */
+    struct ifaddrs * list = NULL;
+    if (getifaddrs(&list) == 0) {
+        dw_add(r, used, "\n%s", "Player interfaces:");
+        for (struct ifaddrs * i = list; i; i = i->ifa_next) {
+            if (!i->ifa_addr || i->ifa_addr->sa_family != AF_INET || (i->ifa_flags & IFF_LOOPBACK)) continue;
+            uint32_t m = i->ifa_netmask ? ntohl(((struct sockaddr_in *) i->ifa_netmask)->sin_addr.s_addr) : 0;
+            int bits = 0;
+            while (bits < 32 && (m & (0x80000000U >> bits))) bits++;
+            char a[INET_ADDRSTRLEN];
+            inet_ntop(AF_INET, &((struct sockaddr_in *) i->ifa_addr)->sin_addr, a, sizeof(a));
+            dw_add(r, used, " %s %s/%d%s", i->ifa_name, a, bits, (i->ifa_flags & IFF_UP) ? "" : " (down)");
+        }
+        freeifaddrs(list);
+    }
+    /* The route the kernel picks: the longest matching prefix in /proc/net/route. */
+    FILE * f = fopen("/proc/net/route", "r");
+    if (f) {
+        char line[256], best_if[32] = "", via[INET_ADDRSTRLEN] = "";
+        int best_bits = -1;
+        if (fgets(line, sizeof(line), f)) {
+            while (fgets(line, sizeof(line), f)) {
+                char ifn[32];
+                unsigned dst, gw, flags, refcnt, use, metric, mask;
+                if (sscanf(line, "%31s %x %x %x %u %u %u %x", ifn, &dst, &gw, &flags, &refcnt, &use, &metric, &mask) != 8) continue;
+                if (!(flags & 1U)) continue; /* RTF_UP */
+                uint32_t d = ntohl(dst), mk = ntohl(mask);
+                if ((ip & mk) != (d & mk)) continue;
+                int bits = 0;
+                while (bits < 32 && (mk & (0x80000000U >> bits))) bits++;
+                if (bits <= best_bits) continue;
+                best_bits = bits;
+                snprintf(best_if, sizeof(best_if), "%s", ifn);
+                struct in_addr g = { .s_addr = gw };
+                if (gw) inet_ntop(AF_INET, &g, via, sizeof(via)); else via[0] = '\0';
+            }
+        }
+        fclose(f);
+        if (best_bits >= 0) dw_add(r, used, "\nRoute to %s: a /%d route on %s%s%s", dotted, best_bits, best_if,
+                                   via[0] ? " via " : "", via);
+        else dw_add(r, used, "\nRoute to %s: none", dotted);
+    }
+    /* Two bare connections; the first also has the kernel look up its hardware address. */
+    char c443[80], c80[80];
+    dw_connect_test(ip, 443, c443, sizeof(c443));
+    dw_connect_test(ip, 80, c80, sizeof(c80));
+    dw_add(r, used, "\n%s port 443: %s; port 80: %s", dotted, c443, c80);
+    f = fopen("/proc/net/arp", "r");
+    if (f) {
+        char line[256];
+        bool seen = false;
+        if (fgets(line, sizeof(line), f)) {
+            while (fgets(line, sizeof(line), f)) {
+                char a[48], hw[32], dev[32];
+                unsigned type, flags;
+                if (sscanf(line, "%47s 0x%x 0x%x %31s %*s %31s", a, &type, &flags, hw, dev) != 5) continue;
+                if (strcmp(a, dotted) != 0) continue;
+                dw_add(r, used, "\nHardware address of %s: %s on %s%s", dotted, hw, dev,
+                       (flags & 2U) ? "" : " (it did not answer)");
+                seen = true;
+            }
+        }
+        fclose(f);
+        if (!seen) dw_add(r, used, "\nHardware address of %s: never looked up", dotted);
+    }
 }
 
 static bool dw_discover(dw_ctx_t * x, discworld_result_t * r) {
@@ -1400,6 +1509,7 @@ static bool dw_discover(dw_ctx_t * x, discworld_result_t * r) {
     char self_ip[INET_ADDRSTRLEN] = "";
     int nf = dw_stopping(x) ? 0 : dw_scan_network(x, found, DW_SCAN_MAX_FOUND, self_ip, sizeof(self_ip));
     if (self_ip[0]) dw_add(r, &used, "\nThis player is at %s", self_ip);
+    if (x->config->pin_ip[0] && !dw_stopping(x)) dw_check_address(r, &used, x->config->pin_ip);
     /* An https server behind a proxy (Caddy) answers only under its name, so
      * each https address is also tried as the usual names, pinned to it. */
     const char * names[3] = { NULL, "discworld.local", "jarvis.local" };
