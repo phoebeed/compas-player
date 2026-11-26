@@ -198,6 +198,7 @@ typedef struct {
      * Subsonic one above. auto_ssid: sync by itself while joined to this
      * network (empty: only when asked). charging_only: never sync on battery. */
     char discworld_url[256];
+    char discworld_ip[48];    /* address the sync last reached discworld_url's name at, when names did not work */
     char discworld_password[128];
     /* The people whose favourite playlists the player keeps, comma
      * separated ("Rachel, Phoebe, Amelie"): Home > Favourites shows one

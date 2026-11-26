@@ -141,6 +141,7 @@ static bool dw_start(dw_job_kind_t kind) {
     discworld_normalize_url(current_settings.discworld_url, dw_job.config.base_url, sizeof(dw_job.config.base_url));
     snprintf(dw_job.config.password, sizeof(dw_job.config.password), "%s", current_settings.discworld_password);
     snprintf(dw_job.config.people, sizeof(dw_job.config.people), "%s", current_settings.favorites_people);
+    snprintf(dw_job.config.pin_ip, sizeof(dw_job.config.pin_ip), "%s", current_settings.discworld_ip);
     snprintf(dw_job.config.card_root, sizeof(dw_job.config.card_root), "%s", MUSIC_ROOT_DIR);
 #ifndef HOST_BUILD
     dw_job.config.require_mounted = true;
@@ -259,9 +260,11 @@ static void dw_finish_sync(bool automatic) {
     if (r.found_url[0]) {
         /* The set address did not answer; Discworld was found here, so keep it. */
         snprintf(current_settings.discworld_url, sizeof(current_settings.discworld_url), "%s", r.found_url);
+        snprintf(current_settings.discworld_ip, sizeof(current_settings.discworld_ip), "%s", r.found_ip);
         settings_save_async(&current_settings);
         char toast[220];
-        snprintf(toast, sizeof(toast), TR("Found Discworld at %s"), r.found_url);
+        if (r.found_ip[0]) snprintf(toast, sizeof(toast), TR("Found Discworld at %s (%s)"), r.found_url, r.found_ip);
+        else snprintf(toast, sizeof(toast), TR("Found Discworld at %s"), r.found_url);
         show_info_toast(toast);
     }
     if (r.status == DISCWORLD_OK) {
@@ -374,6 +377,7 @@ static void dw_url_done(const char * text, void * user) {
     (void) user;
     char url[sizeof(current_settings.discworld_url)];
     discworld_normalize_url(text ? text : "", url, sizeof(url));
+    if (strcmp(url, current_settings.discworld_url) != 0) current_settings.discworld_ip[0] = '\0';
     snprintf(current_settings.discworld_url, sizeof(current_settings.discworld_url), "%s", url);
     settings_save_async(&current_settings);
     dw_populate();
@@ -491,8 +495,12 @@ static void dw_populate(void) {
            "on that network every few hours, copying only new and changed songs."));
 
     add_section_header(dw_list, TR("Server"));
-    snprintf(label, sizeof(label), TR("Address: %s"),
-             current_settings.discworld_url[0] ? current_settings.discworld_url : TR("not set"));
+    if (current_settings.discworld_url[0] && current_settings.discworld_ip[0])
+        snprintf(label, sizeof(label), TR("Address: %s (at %s)"), current_settings.discworld_url,
+                 current_settings.discworld_ip);
+    else
+        snprintf(label, sizeof(label), TR("Address: %s"),
+                 current_settings.discworld_url[0] ? current_settings.discworld_url : TR("not set"));
     add_pill_chevron_row(dw_list, label, dw_url_row_cb);
     add_pill_chevron_row(dw_list, current_settings.discworld_password[0] ? TR("Password: set") : TR("Password: none"),
                          dw_password_row_cb);

@@ -52,6 +52,8 @@ typedef struct {
     char people[160];     /* whose playlists ("who"), comma separated; each goes to
                            * Playlists/Favourites/<name>/. Empty: the shared ones,
                            * straight into Playlists/Favourites/. */
+    char pin_ip[48];      /* when set: connect to this address for base_url's host name (kept
+                           * from an earlier search, for a network where names do not work) */
     char card_root[256];  /* the SD card's mount point */
     bool require_mounted; /* refuse when card_root is only the empty mount point (no card in) */
 } discworld_config_t;
@@ -95,6 +97,8 @@ typedef struct {
                               * failed search, one line for each address tried. */
     char found_url[160];     /* the set address did not answer and Discworld was found here
                               * (and synced with): the caller saves it. Empty otherwise. */
+    char found_ip[48];       /* with found_url: the address its name was reached at, when the
+                              * name itself could not be looked up (save as pin_ip). */
 } discworld_result_t;
 
 /* Called between files and while downloading; false stops the sync (the

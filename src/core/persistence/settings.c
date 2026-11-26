@@ -116,6 +116,7 @@ static const pfield_t plain_fields[] = {
     PF("subsonic_password", PF_STR, subsonic_password),
     PF("subsonic_verify_tls", PF_BOOL, subsonic_verify_tls),
     PF("discworld_url", PF_STR, discworld_url),
+    PF("discworld_ip", PF_STR, discworld_ip),
     PF("discworld_password", PF_STR, discworld_password),
     PF("favorites_people", PF_STR, favorites_people),
     PF("discworld_auto_ssid", PF_STR, discworld_auto_ssid),
@@ -458,7 +459,7 @@ static void set_defaults(player_settings_t * out) {
     out->subsonic_download_layout = 0;
     memset(out->subsonic_saved, 0, sizeof(out->subsonic_saved));
     out->subsonic_saved_count = 0;
-    snprintf(out->discworld_url, sizeof(out->discworld_url), "http://discworld.local:8080");
+    snprintf(out->discworld_url, sizeof(out->discworld_url), "https://discworld.local");
     out->discworld_password[0] = '\0';
     snprintf(out->favorites_people, sizeof(out->favorites_people), "Rachel, Phoebe, Amelie");
     out->discworld_auto_ssid[0] = '\0';

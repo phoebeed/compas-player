@@ -96,6 +96,13 @@ typedef struct {
 } http_response_t;
 
 bool http_request_ex(const http_request_t * req_in, http_cancel_token_t * cancel, http_response_t * resp);
+
+/* Connects every later request for host to ip (dotted) instead of looking
+ * the name up, while the URL keeps the name for the Host header and the TLS
+ * server name. For a server that only answers https under its name, found
+ * where name lookups do not work. ip NULL or "" removes the pin. A few pins
+ * at most; thread-safe. */
+void http_pin_host(const char * host, const char * ip);
 void http_response_free(http_response_t * resp);
 
 /* Progress callback for downloads: bytes received so far, and total bytes
