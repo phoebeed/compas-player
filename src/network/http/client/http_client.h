@@ -109,6 +109,9 @@ typedef struct {
     uint64_t max_bytes;
     unsigned max_redirects;
     uint32_t connect_timeout_ms, read_timeout_ms, total_timeout_ms;
+    /* Optional Cookie header value (borrowed, no CR/LF), sent to the first
+     * hop only: a redirect elsewhere never carries it. NULL when unused. */
+    const char *cookie;
 } http_file_request_t;
 
 typedef struct {

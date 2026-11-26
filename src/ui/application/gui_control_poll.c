@@ -27,6 +27,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include "gui_internal.h"
+#include "../network/gui_network_discworld.h"
 
 #ifdef UI_PERF_TRACE
 #include "../diagnostics/ui_frame_trace.h"
@@ -243,6 +244,7 @@ static void poll_network_jobs(void) {
     poll_subsonic_refresh();
     poll_subsonic_covers();
     poll_wifi_scan();
+    gui_network_discworld_poll();
     poll_wifi_connect();
     poll_wifi_connect_saved();
     poll_wifi_disconnect();

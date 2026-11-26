@@ -81,7 +81,7 @@ static download_error_t transfer(const download_request_t *r, download_file_t *f
     http_file_request_t request = {.url = r->url, .verify_tls = r->verify_tls,
         .max_bytes = r->max_bytes, .max_redirects = r->max_redirects,
         .connect_timeout_ms = r->connect_timeout_ms, .read_timeout_ms = r->read_timeout_ms,
-        .total_timeout_ms = r->total_timeout_ms};
+        .total_timeout_ms = r->total_timeout_ms, .cookie = r->cookie};
     http_file_result_t response = {0};
     bool ok = http_get_to_open_file(&request, f->file, cancel, progress, user, &response);
     out->http_status = response.status;

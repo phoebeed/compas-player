@@ -957,7 +957,7 @@ static bool file_read_response(http_conn_t *conn, file_transfer_t *t, char *loca
     return file_read_body(&reader, t, &head);
 }
 
-static bool file_get_hop(file_transfer_t *t, const char *url, char *location, size_t location_size) {
+static bool file_get_hop(file_transfer_t *t, const char *url, const char *cookie, char *location, size_t location_size) {
     bool https;
     char host[256], port[16], path[2048];
     if (!http_url_is_valid(url) || !http_conn_parse_url(url, &https, host, sizeof(host), port, sizeof(port), path, sizeof(path))) {
@@ -975,8 +975,9 @@ static bool file_get_hop(file_transfer_t *t, const char *url, char *location, si
         return false;
     }
     conn.deadline_ms = t->deadline;
-    char request[2560];
-    int n = snprintf(request, sizeof(request), "GET %s HTTP/1.1\r\nHost: %s:%s\r\nUser-Agent: Compas/compas_player\r\nConnection: close\r\n\r\n", path, host, port);
+    char request[3584];
+    int n = snprintf(request, sizeof(request), "GET %s HTTP/1.1\r\nHost: %s:%s\r\nUser-Agent: Compas/compas_player\r\n%s%s%sConnection: close\r\n\r\n",
+                     path, host, port, cookie ? "Cookie: " : "", cookie ? cookie : "", cookie ? "\r\n" : "");
     bool ok = n > 0 && (size_t)n < sizeof(request) && write_all(&conn, (const uint8_t *)request, (size_t)n);
     if (ok) ok = file_read_response(&conn, t, location, location_size);
     if (!ok && !t->result->error[0])
@@ -1012,7 +1013,8 @@ bool http_get_to_open_file(const http_file_request_t *request, FILE *file,
     if (!result) return false;
     memset(result, 0, sizeof(*result));
     result->error = HTTP_ERR_NONE;
-    if (!request || !file || !request->url || !request->max_bytes || strlen(request->url) >= 2048) {
+    if (!request || !file || !request->url || !request->max_bytes || strlen(request->url) >= 2048 ||
+        (request->cookie && (strlen(request->cookie) >= 1024 || strpbrk(request->cookie, "\r\n")))) {
         result->error = HTTP_ERR_INVALID_REQUEST;
         return false;
     }
@@ -1024,7 +1026,9 @@ bool http_get_to_open_file(const http_file_request_t *request, FILE *file,
     for (unsigned hop = 0;; hop++) {
         if (!file_transfer_active(&transfer)) return false;
         result->content_type[0] = '\0';
-        if (!file_get_hop(&transfer, current, location, sizeof(location))) return false;
+        /* The cookie belongs to the server first asked; never forward it on a redirect. */
+        const char *cookie = hop == 0 && request->cookie && request->cookie[0] ? request->cookie : NULL;
+        if (!file_get_hop(&transfer, current, cookie, location, sizeof(location))) return false;
         if (result->status < 300 || result->status >= 400) return true;
         if (!file_redirect(&transfer, current, location, hop)) return false;
     }

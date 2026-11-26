@@ -115,6 +115,12 @@ static const pfield_t plain_fields[] = {
     PF("subsonic_username", PF_STR, subsonic_username),
     PF("subsonic_password", PF_STR, subsonic_password),
     PF("subsonic_verify_tls", PF_BOOL, subsonic_verify_tls),
+    PF("discworld_url", PF_STR, discworld_url),
+    PF("discworld_password", PF_STR, discworld_password),
+    PF("discworld_profile", PF_STR, discworld_profile),
+    PF("discworld_auto_ssid", PF_STR, discworld_auto_ssid),
+    PF("discworld_charging_only", PF_BOOL, discworld_charging_only),
+    PF("discworld_last_sync", PF_INT, discworld_last_sync),
     PF("bt_volume_sync", PF_BOOL, bt_volume_sync_enabled),
     PF("bt_dac_mode", PF_BOOL, bt_dac_mode_enabled),
     PF("dac_nos", PF_BOOL, dac_nos),
@@ -452,6 +458,12 @@ static void set_defaults(player_settings_t * out) {
     out->subsonic_download_layout = 0;
     memset(out->subsonic_saved, 0, sizeof(out->subsonic_saved));
     out->subsonic_saved_count = 0;
+    snprintf(out->discworld_url, sizeof(out->discworld_url), "http://jarvis.local:8080");
+    out->discworld_password[0] = '\0';
+    out->discworld_profile[0] = '\0';
+    out->discworld_auto_ssid[0] = '\0';
+    out->discworld_charging_only = false;
+    out->discworld_last_sync = 0;
     out->bt_volume_sync_enabled = true;
     out->dac_filter = 0;
     out->dac_nos = false;
