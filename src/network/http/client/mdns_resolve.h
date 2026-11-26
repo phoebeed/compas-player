@@ -16,6 +16,15 @@ bool mdns_is_local_name(const char * host);
  * Blocking up to timeout_ms; false when nobody answered. */
 bool mdns_resolve_ipv4(const char * host, uint32_t timeout_ms, char * out, size_t out_size);
 
+/* Looks up a DNS-SD service instance ("Discworld._http._tcp.local") the
+ * same way: its host name ("discworld.local") into target and its port.
+ * Blocking up to timeout_ms; false when nobody answered. */
+bool mdns_resolve_srv(const char * service, uint32_t timeout_ms, char * target, size_t size, uint16_t * port);
+
+/* Parses one response for the SRV record of name. Exposed for tests. */
+bool mdns_parse_srv_response(const uint8_t * packet, size_t len, const char * name, char * target, size_t size,
+                             uint16_t * port);
+
 /* Parses one mDNS response: true and *out_addr (network order) when it holds
  * an A record for name. Exposed for tests. */
 bool mdns_parse_a_response(const uint8_t * packet, size_t len, const char * name, uint32_t * out_addr);

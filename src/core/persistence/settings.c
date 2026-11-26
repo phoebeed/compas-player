@@ -458,7 +458,7 @@ static void set_defaults(player_settings_t * out) {
     out->subsonic_download_layout = 0;
     memset(out->subsonic_saved, 0, sizeof(out->subsonic_saved));
     out->subsonic_saved_count = 0;
-    snprintf(out->discworld_url, sizeof(out->discworld_url), "http://jarvis.local:8080");
+    snprintf(out->discworld_url, sizeof(out->discworld_url), "http://discworld.local:8080");
     out->discworld_password[0] = '\0';
     snprintf(out->favorites_people, sizeof(out->favorites_people), "Rachel, Phoebe, Amelie");
     out->discworld_auto_ssid[0] = '\0';
