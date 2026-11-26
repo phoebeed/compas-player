@@ -251,6 +251,11 @@ typedef struct {
     bool bt_hide_unnamed_devices;
     bool wifi_restore_at_startup;
     bool bt_restore_at_startup;
+    /* When true, playback that paused because the Bluetooth output dropped
+     * resumes once an A2DP output reconnects (a car turned back on). Off by
+     * default: a headset that reconnects on its own would otherwise start
+     * playing unasked. */
+    bool bt_resume_on_reconnect;
     bool wifi_last_on;
     bool bt_last_on;
 

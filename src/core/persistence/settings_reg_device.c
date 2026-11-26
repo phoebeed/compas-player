@@ -47,6 +47,8 @@ const setting_desc_t settings_reg_device[] = {
                SET_APPLY_LIVE),
     BOOL_ENTRY("bt_restore_at_startup", "connections", N_("Restore Bluetooth at Startup"), bt_restore_at_startup,
                SET_APPLY_LIVE),
+    BOOL_ENTRY("bt_resume_on_reconnect", "connections", N_("Resume when reconnected"), bt_resume_on_reconnect,
+               SET_APPLY_LIVE),
     BOOL_ENTRY("bt_hide_unnamed_devices", "connections", "Hide unnamed devices", bt_hide_unnamed_devices,
                SET_APPLY_LIVE),
     BOOL_ENTRY("bt_volume_sync_enabled", "connections", "Bluetooth volume sync", bt_volume_sync_enabled,

@@ -123,6 +123,7 @@ static const pfield_t plain_fields[] = {
     PF("bt_hide_unnamed_devices", PF_BOOL, bt_hide_unnamed_devices),
     PF("wifi_restore_at_startup", PF_BOOL, wifi_restore_at_startup),
     PF("bt_restore_at_startup", PF_BOOL, bt_restore_at_startup),
+    PF("bt_resume_on_reconnect", PF_BOOL, bt_resume_on_reconnect),
     PF("wifi_last_on", PF_BOOL, wifi_last_on),
     PF("bt_last_on", PF_BOOL, bt_last_on),
     PF("wifi_dac_mode", PF_BOOL, wifi_dac_mode_enabled),
@@ -470,6 +471,7 @@ static void set_defaults(player_settings_t * out) {
     out->bt_hide_unnamed_devices = true;
     out->wifi_restore_at_startup = false;
     out->bt_restore_at_startup = false;
+    out->bt_resume_on_reconnect = false;
     out->wifi_last_on = false;
     out->bt_last_on = false;
     out->wifi_dac_mode_enabled = false;

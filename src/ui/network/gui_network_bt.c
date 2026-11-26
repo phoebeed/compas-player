@@ -670,6 +670,7 @@ static void populate_bt_advanced_screen(void);
 static void bt_volume_sync_toggle_cb(lv_event_t * e);
 static void bt_hide_unnamed_toggle_cb(lv_event_t * e);
 static void bt_restore_at_startup_toggle_cb(lv_event_t * e);
+static void bt_resume_on_reconnect_toggle_cb(lv_event_t * e);
 static void bt_codec_settings_row_cb(lv_event_t * e);
 
 /* Cycling the accessory's link blocks for seconds, so it runs on a worker
@@ -840,6 +841,10 @@ static void populate_bt_advanced_screen(void) {
                         current_settings.bt_hide_unnamed_devices, bt_hide_unnamed_toggle_cb);
     add_pill_toggle_row(bt_advanced_list, TR("Restore at startup"),
                         current_settings.bt_restore_at_startup, bt_restore_at_startup_toggle_cb);
+    /* Picks up playback a Bluetooth disconnect paused, e.g. when the car
+     * is switched off and on again (see poll_output_connection()). */
+    add_pill_toggle_row(bt_advanced_list, TR("Resume when reconnected"),
+                        current_settings.bt_resume_on_reconnect, bt_resume_on_reconnect_toggle_cb);
 }
 
 static void bt_advanced_settings_row_cb(lv_event_t * e) {
@@ -877,6 +882,14 @@ static void bt_restore_at_startup_toggle_cb(lv_event_t * e) {
     current_settings.bt_restore_at_startup = !current_settings.bt_restore_at_startup;
     if (current_settings.bt_restore_at_startup)
         current_settings.bt_last_on = bt_is_powered_cached;
+    settings_save_async(&current_settings);
+    populate_bt_advanced_screen();
+}
+
+/* Read on the next control tick; turning it off also drops a pending resume. */
+static void bt_resume_on_reconnect_toggle_cb(lv_event_t * e) {
+    if (lv_event_get_code(e) != LV_EVENT_CLICKED) return;
+    current_settings.bt_resume_on_reconnect = !current_settings.bt_resume_on_reconnect;
     settings_save_async(&current_settings);
     populate_bt_advanced_screen();
 }
