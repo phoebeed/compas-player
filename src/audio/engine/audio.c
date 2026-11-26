@@ -1959,7 +1959,11 @@ static pb_step_t track_end_or_handoff(playback_session_t * s, const chunk_cmd_t 
         /* DoP to DoP at one rate keeps the stream open. */
         if (decoder_is_dop(&s->cur_dec) && decoder_is_dop(&s->nxt_dec))
             dsd_continue_dop_markers(s->nxt_dec.as.dsd, s->cur_dec.as.dsd);
+        /* A format change reopens the device; play out the end of the
+         * current track first instead of dropping its last buffer. */
+        audio_output_set_drain_on_reopen(true);
         bool device_ok = ensure_device_for_decoder(&s->nxt_dec, &s->nxt_frames_consumed);
+        audio_output_set_drain_on_reopen(false);
 #else
         bool device_ok = ensure_device(s->nxt_dec.channels, s->nxt_dec.sample_rate);
 #endif

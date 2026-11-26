@@ -442,6 +442,25 @@ static void close_bt_device(void) {
     bt_aplay_fd = -1;
 }
 
+/* The aplay pipe's EOF makes aplay drain and exit by itself. Bounded, so a
+ * stalled BlueALSA cannot hold the audio thread; then it is stopped. */
+#define APLAY_DRAIN_MAX_MS 1500
+static void drain_aplay(pid_t * pid, int * fd) {
+    if (*pid < 0) return;
+    if (*fd >= 0) close(*fd);
+    *fd = -1;
+    for (int waited_ms = 0; waited_ms < APLAY_DRAIN_MAX_MS; waited_ms += 10) {
+        if (waitpid(*pid, NULL, WNOHANG) == *pid) {
+            *pid = -1;
+            return;
+        }
+        usleep(10000);
+    }
+    DBG_LOG("audio_output: aplay did not finish draining in %d ms, stopping it\n", APLAY_DRAIN_MAX_MS);
+    subprocess_terminate(*pid);
+    *pid = -1;
+}
+
 static void close_usb_device(void) {
     pthread_mutex_lock(&state_mutex);
     usb_dsd_output_t *direct = usb_dsd;
@@ -693,6 +712,33 @@ static void close_device_state(void) {
     pthread_mutex_unlock(&state_mutex);
 }
 
+void audio_output_drain(void) {
+    if (!caller_owns_output()) return;
+    pthread_mutex_lock(&state_mutex);
+    output_target_t target = active_target;
+    struct pcm * pcm = alsa_pcm;
+    bool direct_usb = usb_dsd != NULL;
+    pthread_mutex_unlock(&state_mutex);
+    if (target == OUTPUT_TARGET_BT) {
+        drain_aplay(&bt_aplay_pid, &bt_aplay_fd);
+    } else if (target == OUTPUT_TARGET_USB) {
+        if (!direct_usb) drain_aplay(&usb_aplay_pid, &usb_aplay_fd);
+    } else if (pcm) {
+        /* DRAIN also starts a stream that never reached its start threshold
+         * (a track shorter than the buffer). The kernel bounds the wait. */
+        if (pcm_drain(pcm) < 0)
+            DBG_LOG("audio_output: pcm_drain failed: %s\n", pcm_get_error(pcm));
+    }
+    /* The idle time after the drain is not a gap between writes. */
+    atomic_store_explicit(&diag_have_write_end, false, memory_order_relaxed);
+}
+
+static bool drain_before_reopen = false; /* audio thread only */
+
+void audio_output_set_drain_on_reopen(bool on) {
+    drain_before_reopen = on;
+}
+
 void audio_output_close(void) {
     if (!caller_owns_output()) return;
     close_device_state();
@@ -775,6 +821,9 @@ static bool ensure_output(unsigned int channels, unsigned int sample_rate, bool 
     if (device_open && target == OUTPUT_TARGET_LOCAL && active_low_latency != low_latency) device_open = false;
     if (device_open && active_dop != dop) device_open = false;
     if (device_open && device_channels == channels && device_sample_rate == sample_rate) return true;
+    /* Only a device that stays on the same route is drained: after a route
+     * change the old output is gone or no longer wanted. */
+    if (drain_before_reopen && device_open && active_target == target) audio_output_drain();
     close_device_state();
     bool opened = open_device(channels, sample_rate, low_latency, want_s24, dop, target, usb_device, usb_mode);
     if (!opened) {
