@@ -1490,8 +1490,12 @@ static void chunk_snapshot_next_locked(playback_session_t * s, chunk_cmd_t * c) 
      * one fills the whole aplay pipe (8192 frames x 8 bytes = 64 KiB) and the
      * radio costs far more power than the wakeups anyway, so keep the normal
      * size there. config_mutex (audio_output.c) never waits on audio_mutex. */
+#ifndef HOST_BUILD
     c->chunk_frames = (low_power_mode && !audio_output_is_bluetooth_requested())
                           ? LOW_POWER_CHUNK_FRAMES : NORMAL_CHUNK_FRAMES;
+#else
+    c->chunk_frames = low_power_mode ? LOW_POWER_CHUNK_FRAMES : NORMAL_CHUNK_FRAMES;
+#endif
 
     /* Phase 3: Stack-buffered owned snapshot of next track metadata.
      * Completely eliminates steady-state heap allocations during playback. */
