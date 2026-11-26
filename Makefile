@@ -956,7 +956,11 @@ TARGET_ONLY_APP_SRCS += src/core/math/fast_lrintf.c
 LIBEXECINFO_SRCS = $(LIBEXECINFO_DIR)/execinfo.c $(LIBEXECINFO_DIR)/stacktraverse.c
 
 # Object files
-HOST_OBJS = $(BUILD_HOST_DIR)/sonic/sonic.o $(APP_SRCS:src/%.c=$(BUILD_HOST_DIR)/%.o) $(HOST_MACOS_SRCS:src/%.c=$(BUILD_HOST_DIR)/%.o) $(APP_CXX_SRCS:src/%.cpp=$(BUILD_HOST_DIR)/%.o) \
+# The simulator fakes Wi-Fi (src/host/sim_wifi.c) instead of driving
+# wpa_supplicant and udhcpc; the computer's own network carries the traffic.
+HOST_SIM_WIFI_REPLACES = src/network/wifi/wifi_control.c src/network/wifi/wifi_status.c src/network/wifi/wifi_dhcp.c
+HOST_APP_SRCS = $(filter-out $(HOST_SIM_WIFI_REPLACES),$(APP_SRCS)) src/host/sim_wifi.c
+HOST_OBJS = $(BUILD_HOST_DIR)/sonic/sonic.o $(HOST_APP_SRCS:src/%.c=$(BUILD_HOST_DIR)/%.o) $(HOST_MACOS_SRCS:src/%.c=$(BUILD_HOST_DIR)/%.o) $(APP_CXX_SRCS:src/%.cpp=$(BUILD_HOST_DIR)/%.o) \
             $(LVGL_SRCS:$(LVGL_DIR)/%.c=$(BUILD_HOST_DIR)/lvgl/%.o) $(LV_XML_SRCS:$(LV_XML_DIR)/%.c=$(BUILD_HOST_DIR)/lv_xml/%.o) $(FAAD2_SRCS:$(FAAD2_DIR)/libfaad/%.c=$(BUILD_HOST_DIR)/faad2/%.o) \
             $(ALAC_C_SRCS:$(ALAC_DIR)/codec/%.c=$(BUILD_HOST_DIR)/alac/%.o) $(ALAC_CXX_SRCS:$(ALAC_DIR)/codec/%.cpp=$(BUILD_HOST_DIR)/alac/%.o) \
             $(MBEDTLS_SRCS:$(MBEDTLS_DIR)/library/%.c=$(BUILD_HOST_DIR)/mbedtls/%.o) $(CJSON_SRCS:$(CJSON_DIR)/%.c=$(BUILD_HOST_DIR)/cjson/%.o) \
