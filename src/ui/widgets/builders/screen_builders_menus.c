@@ -180,8 +180,8 @@ static void icon_grid_tile_content(lv_obj_t * tile, const icon_grid_item_t * ite
     /* Category icons are natively 100px, the fallback when the header
      * cannot be read. */
     int32_t target_icon_h;
-    lv_obj_t * img_wrap = scaled_icon_create(tile, asset_path(item->icon_asset), target_icon_px,
-                                             100, &target_icon_h);
+    const char * icon = item->icon_src ? (const char *) item->icon_src : asset_path(item->icon_asset);
+    lv_obj_t * img_wrap = scaled_icon_create(tile, icon, target_icon_px, 100, &target_icon_h);
     lv_obj_t * img = lv_obj_get_child(img_wrap, 0);
 
     lv_obj_t * label = lv_label_create(tile);
@@ -200,7 +200,7 @@ static void icon_grid_tile_content(lv_obj_t * tile, const icon_grid_item_t * ite
 
     icon_tile_place_caption(img_wrap, label, target_icon_h, available_h);
 
-    if (item->icon_asset_selected) {
+    if (item->icon_asset_selected && !item->icon_src) {
         icon_tile_press_ctx_t * ctx = malloc(sizeof(icon_tile_press_ctx_t));
         if (ctx) {
             ctx->img = img;
@@ -245,6 +245,13 @@ lv_obj_t * build_icon_grid_screen(const icon_grid_item_t * items, int item_count
     /* Rows use fixed pixel height based on ICON_GRID_REFERENCE_ROWS rather than
      * fractional shares, so cell heights remain consistent regardless of row count. */
     int32_t row_h = (scr_h - header_h) / ICON_GRID_REFERENCE_ROWS;
+    /* One row more than the reference (Home with its Favorites tile) still
+     * fits the screen: the rows and icons shrink to share it, so nothing
+     * scrolls out of reach. */
+    if (row_count == ICON_GRID_REFERENCE_ROWS + 1) {
+        row_h = (scr_h - header_h) / row_count;
+        target_icon_px = target_icon_px * ICON_GRID_REFERENCE_ROWS / row_count;
+    }
 
     lv_obj_t * grid = icon_grid_container(scr, row_count, row_h, header_h, tile_gap);
     if (!grid) {
@@ -269,7 +276,8 @@ lv_obj_t * build_icon_grid_screen(const icon_grid_item_t * items, int item_count
          * geometry refresh; unlike a per-tile context it adds no
          * steady-state heap or callback overhead. */
         lv_obj_add_flag(tile, LV_OBJ_FLAG_USER_1);
-        lv_obj_set_grid_cell(tile, LV_GRID_ALIGN_STRETCH, i % col_count, 1,
+        bool span = item->span_row && i % col_count == 0 && i == item_count - 1;
+        lv_obj_set_grid_cell(tile, LV_GRID_ALIGN_STRETCH, i % col_count, span ? col_count : 1,
                              LV_GRID_ALIGN_STRETCH, i / col_count, 1);
         /* Margins visually inset the tile within its stretched grid cell,
          * with tile_gap / 2 per side so adjacent tiles have a total gap of tile_gap. */
