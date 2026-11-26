@@ -1093,6 +1093,7 @@ const i18n_entry_t i18n_entries_fi[] = {
     {"Select all", (const char * const[]){"Valitse kaikki"}, 1},
     {"Select all (%d)", (const char * const[]){"Valitse kaikki (%d)"}, 1},
     {"Selected plugins are ready.\n", (const char * const[]){"Valitut liitännäiset ovat valmiita.\n"}, 1},
+    {"Send cover art", (const char * const[]){"Lähetä kansikuva"}, 1},
     {"September", (const char * const[]){"syyskuu"}, 1},
     {"Sequential", (const char * const[]){"Järjestyksessä"}, 1},
     {"Server URL (e.g. %s)", (const char * const[]){"Palvelimen URL-osoite (esim. %s)"}, 1},

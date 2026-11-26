@@ -51,6 +51,8 @@ const setting_desc_t settings_reg_device[] = {
                SET_APPLY_LIVE),
     BOOL_ENTRY("bt_hide_unnamed_devices", "connections", "Hide unnamed devices", bt_hide_unnamed_devices,
                SET_APPLY_LIVE),
+    BOOL_ENTRY("bt_send_cover_art", "connections", "Send cover art", bt_send_cover_art,
+               SET_APPLY_LIVE),
     BOOL_ENTRY("bt_volume_sync_enabled", "connections", "Bluetooth volume sync", bt_volume_sync_enabled,
                SET_APPLY_LIVE, .flags = SET_F_READONLY, .reason = "device_only"),
     BOOL_ENTRY("bt_dac_mode_enabled", "connections", "Bluetooth DAC mode", bt_dac_mode_enabled,

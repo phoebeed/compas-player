@@ -1093,6 +1093,7 @@ const i18n_entry_t i18n_entries_zh_CN[] = {
     {"Select all", (const char * const[]){"全选"}, 1},
     {"Select all (%d)", (const char * const[]){"全选（%d）"}, 1},
     {"Selected plugins are ready.\n", (const char * const[]){"所选插件已就绪。\n"}, 1},
+    {"Send cover art", (const char * const[]){"发送封面"}, 1},
     {"September", (const char * const[]){"九月"}, 1},
     {"Sequential", (const char * const[]){"顺序播放"}, 1},
     {"Server URL (e.g. %s)", (const char * const[]){"服务器 URL（例如 %s）"}, 1},
