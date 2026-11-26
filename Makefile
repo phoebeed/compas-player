@@ -762,6 +762,7 @@ APP_SRCS += src/ui/settings/gui_about_info.c
 APP_SRCS += src/ui/plugins/gui_plugin_library.c
 APP_SRCS += src/ui/application/gui_screen_off_memory.c
 APP_SRCS += src/ui/application/gui_screen_power.c src/ui/application/gui_control_poll.c
+APP_SRCS += src/ui/library/favorites/gui_favorites.c src/ui/home/favorites_icon.c src/library/playlists/list_positions.c
 APP_SRCS += src/ui/settings/controls/gui_external_controls.c
 APP_SRCS += src/ui/plugins/manage/gui_plugin_order_editor.c
 APP_SRCS += src/ui/player/settings/gui_equalizer.c
